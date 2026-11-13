@@ -28,6 +28,8 @@ from app.engines.risk_assessment import assess_shipment_risk
 
 from app.engines.resolution_planner import create_resolution_plan
 
+from app.llm.router import create_llm_router
+
 
 # ==========================================================
 # HELPER: UPDATE AGENT RUN
@@ -297,6 +299,7 @@ def monitoring_node(state: CargoPilotState):
             "exception_details": exception_details,
             "monitoring_results": monitoring_results,
             "investigation_results": [],
+            "llm_analysis_results": [],
             "risk_assessment_results": [],
             "resolution_results": [],
             "errors": []
@@ -472,6 +475,146 @@ def investigation_node(state: CargoPilotState):
 
     finally:
         db.close()
+
+
+# ==========================================================
+# LLM INVESTIGATION ANALYSIS NODE
+# ==========================================================
+
+def llm_analysis_node(state: CargoPilotState):
+
+    print("\n========== LLM ANALYSIS NODE STARTED ==========")
+
+    analysis_results = []
+
+    try:
+
+        # Create the configured Gemini/Ollama router.
+        router = create_llm_router()
+
+        investigation_results = state.get(
+            "investigation_results", []
+        )
+
+        exception_details = state.get(
+            "exception_details", []
+        )
+
+        for investigation in investigation_results:
+
+            exception_id = investigation["exception_id"]
+
+            # Find the corresponding exception information.
+            exception_data = next(
+                (
+                    item for item in exception_details
+                    if item["exception_id"] == exception_id
+                ),
+                {}
+            )
+
+            # Only provide evidence already collected
+            # by our deterministic investigation engine.
+            evidence = {
+                "exception": exception_data,
+                "investigation_findings": {
+                    "summary": investigation.get("summary"),
+                    "possible_cause": investigation.get(
+                        "possible_cause"
+                    ),
+                    "affected_process": investigation.get(
+                        "affected_process"
+                    ),
+                    "recommended_next": investigation.get(
+                        "recommended_next"
+                    ),
+                    "evidence_count": investigation.get(
+                        "evidence_count"
+                    )
+                }
+            }
+
+            prompt = f"""
+You are the investigation analysis assistant
+for CargoPilot 360, a logistics operations system.
+
+Analyze the following verified investigation findings.
+
+INVESTIGATION DATA:
+{evidence}
+
+INSTRUCTIONS:
+
+1. Summarize the operational problem.
+2. Explain the possible cause identified by the
+   investigation engine.
+3. Explain the operational impact that can reasonably
+   be inferred from the supplied information.
+4. Recommend two practical next steps.
+
+IMPORTANT RULES:
+
+- Use only the information supplied.
+- Do not invent shipment events, dates, locations,
+  authorities, people or document details.
+- A possible cause is not a confirmed cause.
+- Clearly distinguish confirmed facts from possibilities.
+- If information is insufficient, say so.
+- Do not approve or execute any action.
+- Keep the response concise and professional.
+"""
+
+            print(
+                f"\nAnalyzing investigation for exception "
+                f"{exception_id}..."
+            )
+
+            try:
+
+                llm_response = router.generate(prompt)
+
+                analysis_results.append({
+                    "exception_id": exception_id,
+                    "provider_status": "SUCCESS",
+                    "analysis": llm_response
+                })
+
+            except Exception as error:
+
+                print(
+                    f"LLM analysis failed for exception "
+                    f"{exception_id}: {error}"
+                )
+
+                analysis_results.append({
+                    "exception_id": exception_id,
+                    "provider_status": "FAILED",
+                    "analysis": None,
+                    "error": str(error)
+                })
+
+        print("\nLLM analysis completed.")
+
+        return {
+            "current_stage": "LLM_ANALYSIS",
+            "llm_analysis_results": analysis_results
+        }
+
+    except Exception as error:
+
+        print("\nLLM analysis node failed:", str(error))
+
+        # LLM failure must not prevent the existing
+        # deterministic risk and decision engines
+        # from continuing.
+        return {
+            "current_stage": "LLM_ANALYSIS",
+            "llm_analysis_results": [{
+                "provider_status": "FAILED",
+                "analysis": None,
+                "error": str(error)
+            }]
+        }
 
 
 # ==========================================================
@@ -689,7 +832,7 @@ def route_after_investigation(state: CargoPilotState):
     if state["workflow_status"] == "FAILED":
         return "finish"
 
-    return "risk_assessment"
+    return "llm_analysis"
 
 
 def route_after_risk_assessment(state: CargoPilotState):
@@ -739,6 +882,9 @@ def finish_node(state: CargoPilotState):
                 "detected_exceptions": state["detected_exceptions"],
                 "investigation_summary": state.get(
                     "investigation_summary"
+                ),
+                "llm_analysis_results": state.get(
+                    "llm_analysis_results", []
                 ),
                 "risk_assessment_results": state.get(
                     "risk_assessment_results", []
@@ -826,6 +972,8 @@ builder.add_node("monitoring", monitoring_node)
 
 builder.add_node("investigation", investigation_node)
 
+builder.add_node("llm_analysis", llm_analysis_node)
+
 builder.add_node("risk_assessment", risk_assessment_node)
 
 builder.add_node("decision", decision_node)
@@ -852,10 +1000,12 @@ builder.add_conditional_edges(
     "investigation",
     route_after_investigation,
     {
-        "risk_assessment": "risk_assessment",
+        "llm_analysis": "llm_analysis",
         "finish": "finish"
     }
 )
+
+builder.add_edge("llm_analysis", "risk_assessment")
 
 builder.add_conditional_edges(
     "risk_assessment",

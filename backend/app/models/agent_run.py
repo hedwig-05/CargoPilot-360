@@ -78,7 +78,8 @@ class AgentRun(Base):
             "RISK_ASSESSMENT",
             "DECISION",
             "ACTION",
-            "VERIFICATION"
+            "VERIFICATION",
+            "LLM"
         ),
         nullable=False
     )
@@ -90,6 +91,11 @@ class AgentRun(Base):
     output_data = Column(JSON, nullable=True)
 
     model_name = Column(String(60), nullable=True)
+
+    provider_name = Column(
+    String(30),
+    nullable=True
+)
 
     prompt_version = Column(String(30), nullable=True)
 

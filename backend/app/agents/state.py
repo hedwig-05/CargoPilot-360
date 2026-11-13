@@ -25,6 +25,9 @@ class CargoPilotState(TypedDict):
     investigation_summary: Optional[str]
     investigation_results: List[dict]
 
+    # LLM investigation analysis
+    llm_analysis_results: List[dict]
+
     # Risk assessment results
     risk_assessment_results: List[dict]
 
