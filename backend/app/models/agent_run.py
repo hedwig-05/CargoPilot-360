@@ -7,6 +7,8 @@ from sqlalchemy import (
     DateTime,
     Text,
     ForeignKey,
+    ForeignKeyConstraint,
+    UniqueConstraint,
     JSON
 )
 from sqlalchemy.sql import func
@@ -17,9 +19,37 @@ from app.database.connection import Base
 class AgentRun(Base):
     __tablename__ = "agent_runs"
 
-    run_id = Column(Integer, primary_key=True, autoincrement=True)
+    __table_args__ = (
+        UniqueConstraint(
+            "run_id",
+            "workflow_id",
+            name="uq_runs_id_workflow"
+        ),
 
-    run_public_id = Column(String(40), nullable=False, unique=True)
+        UniqueConstraint(
+            "workflow_id",
+            "step_no",
+            name="uq_runs_step"
+        ),
+
+        ForeignKeyConstraint(
+            ["parent_run_id", "workflow_id"],
+            ["agent_runs.run_id", "agent_runs.workflow_id"],
+            name="fk_runs_parent"
+        ),
+    )
+
+    run_id = Column(
+        Integer,
+        primary_key=True,
+        autoincrement=True
+    )
+
+    run_public_id = Column(
+        String(40),
+        nullable=False,
+        unique=True
+    )
 
     workflow_id = Column(
         Integer,
@@ -27,13 +57,17 @@ class AgentRun(Base):
         nullable=False
     )
 
+    # Composite self-referencing foreign key is defined above
     parent_run_id = Column(
         Integer,
-        ForeignKey("agent_runs.run_id"),
         nullable=True
     )
 
-    step_no = Column(Integer, nullable=False, default=1)
+    step_no = Column(
+        Integer,
+        nullable=False,
+        default=1
+    )
 
     agent_type = Column(
         Enum(
@@ -41,6 +75,7 @@ class AgentRun(Base):
             "MONITORING",
             "DOCUMENT",
             "INVESTIGATION",
+            "RISK_ASSESSMENT",
             "DECISION",
             "ACTION",
             "VERIFICATION"
@@ -64,7 +99,11 @@ class AgentRun(Base):
 
     latency_ms = Column(Integer, nullable=True)
 
-    retry_count = Column(Integer, nullable=False, default=0)
+    retry_count = Column(
+        Integer,
+        nullable=False,
+        default=0
+    )
 
     execution_status = Column(
         Enum(

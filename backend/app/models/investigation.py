@@ -6,7 +6,8 @@ from sqlalchemy import (
     Enum,
     DateTime,
     Text,
-    ForeignKey
+    ForeignKey,
+    ForeignKeyConstraint
 )
 from sqlalchemy.sql import func
 
@@ -15,6 +16,14 @@ from app.database.connection import Base
 
 class Investigation(Base):
     __tablename__ = "investigations"
+
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["run_id", "workflow_id"],
+            ["agent_runs.run_id", "agent_runs.workflow_id"],
+            name="fk_inv_run"
+        ),
+    )
 
     investigation_id = Column(
         Integer,
@@ -34,9 +43,9 @@ class Investigation(Base):
         nullable=False
     )
 
+    # Composite foreign key is defined in __table_args__
     run_id = Column(
         Integer,
-        ForeignKey("agent_runs.run_id"),
         nullable=False
     )
 

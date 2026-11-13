@@ -36,6 +36,9 @@ def investigate_exception(
     """
 
     try:
+
+        current_time = datetime.now()
+
         # --------------------------------------------------
         # 1. FIND EXCEPTION
         # --------------------------------------------------
@@ -118,6 +121,7 @@ def investigate_exception(
         exception_type = str(exception.exception_type).upper()
 
         possible_cause = "REQUIRES_MANUAL_REVIEW"
+
         affected_process = "LOGISTICS_OPERATIONS"
 
         summary = (
@@ -131,19 +135,27 @@ def investigate_exception(
             "the appropriate corrective action."
         )
 
+        # Find actual document mismatches.
+        # DocumentValidation uses validation_result.
+
         mismatches = [
             validation
             for validation in validations
             if str(
-                getattr(validation, "validation_status", "")
+                getattr(validation, "validation_result", "UNKNOWN")
             ).upper() == "MISMATCH"
         ]
+
+        # --------------------------------------------------
+        # DOCUMENT MISMATCH
+        # --------------------------------------------------
 
         if exception_type == "DOCUMENT_MISMATCH":
 
             affected_process = "DOCUMENT_VALIDATION"
 
             if mismatches:
+
                 fields = sorted({
                     str(
                         getattr(validation, "field_name", "unknown")
@@ -169,13 +181,19 @@ def investigate_exception(
                 )
 
             else:
+
                 possible_cause = (
                     "DOCUMENT_MISMATCH_REQUIRES_REVIEW"
                 )
 
+        # --------------------------------------------------
+        # MISSING DOCUMENT
+        # --------------------------------------------------
+
         elif exception_type == "MISSING_DOCUMENT":
 
             possible_cause = "REQUIRED_DOCUMENT_MISSING"
+
             affected_process = "DOCUMENT_COLLECTION"
 
             summary = (
@@ -188,6 +206,10 @@ def investigate_exception(
                 "responsible stakeholder."
             )
 
+        # --------------------------------------------------
+        # SHIPMENT DELAY
+        # --------------------------------------------------
+
         elif exception_type == "SHIPMENT_DELAY":
 
             overdue_events = [
@@ -197,6 +219,8 @@ def investigate_exception(
                     getattr(event, "event_status", "")
                 ).upper() in ("PENDING", "LATE")
                 and getattr(event, "actual_time", None) is None
+                and getattr(event, "expected_time", None) is not None
+                and event.expected_time < current_time
             ]
 
             possible_cause = (
@@ -209,8 +233,8 @@ def investigate_exception(
 
             summary = (
                 f"Shipment delay investigated. "
-                f"{len(overdue_events)} pending or late "
-                f"milestone records were identified."
+                f"{len(overdue_events)} overdue milestone "
+                f"records were identified."
             )
 
             recommended_next = (
@@ -218,18 +242,28 @@ def investigate_exception(
                 "the shipment status and expected arrival."
             )
 
+        # --------------------------------------------------
+        # CUSTOMS HOLD
+        # --------------------------------------------------
+
         elif exception_type == "CUSTOMS_HOLD":
 
             possible_cause = "CUSTOMS_CLEARANCE_ISSUE"
+
             affected_process = "CUSTOMS_CLEARANCE"
 
             recommended_next = (
                 "Escalate the customs hold for further review."
             )
 
+        # --------------------------------------------------
+        # MISSING MILESTONE
+        # --------------------------------------------------
+
         elif exception_type == "MISSING_MILESTONE":
 
             possible_cause = "SHIPMENT_MILESTONE_NOT_RECORDED"
+
             affected_process = "SHIPMENT_MONITORING"
 
             recommended_next = (
@@ -254,6 +288,7 @@ def investigate_exception(
         )
 
         db.add(investigation)
+
         db.flush()
 
         # --------------------------------------------------
@@ -273,9 +308,11 @@ def investigate_exception(
             risk_id=None,
             action_id=None
         ):
+
             nonlocal evidence_count
 
             # Exactly one evidence source must be provided.
+
             sources = [
                 shipment_id,
                 event_id,
@@ -286,7 +323,11 @@ def investigate_exception(
                 action_id
             ]
 
-            if sum(source is not None for source in sources) != 1:
+            if sum(
+                source is not None
+                for source in sources
+            ) != 1:
+
                 raise ValueError(
                     "Each evidence record must have exactly one source ID."
                 )
@@ -305,6 +346,7 @@ def investigate_exception(
             )
 
             db.add(evidence)
+
             evidence_count += 1
 
         # --------------------------------------------------
@@ -359,8 +401,10 @@ def investigate_exception(
 
         for validation in validations:
 
+            # Correct model attribute: validation_result.
+
             validation_status = str(
-                getattr(validation, "validation_status", "UNKNOWN")
+                getattr(validation, "validation_result", "UNKNOWN")
             ).upper()
 
             evidence_class = (
@@ -414,6 +458,7 @@ def investigate_exception(
         # --------------------------------------------------
 
         if exception.status == "OPEN":
+
             exception.status = "INVESTIGATING"
 
         # --------------------------------------------------
@@ -421,10 +466,18 @@ def investigate_exception(
         # --------------------------------------------------
 
         if commit:
+
             db.commit()
+
             db.refresh(investigation)
+
         else:
+
             db.flush()
+
+        # --------------------------------------------------
+        # 16. RETURN RESULTS
+        # --------------------------------------------------
 
         return {
             "message": "Investigation completed successfully.",
@@ -442,5 +495,7 @@ def investigate_exception(
         }
 
     except Exception:
+
         db.rollback()
+
         raise

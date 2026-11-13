@@ -2,6 +2,7 @@
 import uuid
 from datetime import datetime
 
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from app.models import (
@@ -109,19 +110,11 @@ def determine_plan_priority(exception, risk):
 
 def generate_resolution_reasoning(exception, investigation, risk):
 
-    reasoning_parts = []
-
-    reasoning_parts.append(
-        f"Exception type: {exception.exception_type}"
-    )
-
-    reasoning_parts.append(
-        f"Severity: {exception.severity}"
-    )
-
-    reasoning_parts.append(
+    reasoning_parts = [
+        f"Exception type: {exception.exception_type}",
+        f"Severity: {exception.severity}",
         f"Description: {exception.description}"
-    )
+    ]
 
     if investigation:
 
@@ -189,13 +182,11 @@ def create_resolution_plan(
         )
 
         if not exception:
-
             raise ValueError(
                 f"Exception {exception_id} not found."
             )
 
         if exception.status in ["RESOLVED", "CLOSED"]:
-
             raise ValueError(
                 "Cannot create a resolution plan "
                 "for a resolved or closed exception."
@@ -220,7 +211,6 @@ def create_resolution_plan(
         )
 
         if existing_plan:
-
             raise ValueError(
                 f"An active resolution plan already exists: "
                 f"{existing_plan.plan_id}"
@@ -244,7 +234,6 @@ def create_resolution_plan(
         )
 
         if not investigation:
-
             raise ValueError(
                 "A completed investigation is required "
                 "before creating a resolution plan."
@@ -269,28 +258,28 @@ def create_resolution_plan(
         )
 
         if not risk:
-
             raise ValueError(
-                "No risk assessment was found in the "
-                "investigation workflow for this exception."
+                "No matching risk assessment was found "
+                "for this exception and workflow."
             )
 
         # ------------------------------------------
-        # 5. GET EXISTING EXCEPTION WORKFLOW
+        # 5. GET WORKFLOW
         # ------------------------------------------
+
+        # exception_id is intentionally NOT used here.
+        # One workflow can handle multiple exceptions.
 
         workflow = (
             db.query(AgentWorkflow)
             .filter(
                 AgentWorkflow.workflow_id == risk.workflow_id,
-                AgentWorkflow.exception_id == exception_id,
                 AgentWorkflow.shipment_id == exception.shipment_id
             )
             .first()
         )
 
         if not workflow:
-
             raise ValueError(
                 "The workflow associated with the risk assessment "
                 "could not be found."
@@ -305,7 +294,6 @@ def create_resolution_plan(
         )
 
         if not rule:
-
             raise ValueError(
                 f"No resolution rule defined for "
                 f"{exception.exception_type}"
@@ -321,7 +309,19 @@ def create_resolution_plan(
         )
 
         # ------------------------------------------
-        # 8. CREATE DECISION AGENT RUN
+        # 8. GET NEXT WORKFLOW STEP
+        # ------------------------------------------
+
+        current_max_step = (
+            db.query(func.max(AgentRun.step_no))
+            .filter(
+                AgentRun.workflow_id == workflow.workflow_id
+            )
+            .scalar()
+        ) or 0
+
+        # ------------------------------------------
+        # 9. CREATE DECISION AGENT RUN
         # ------------------------------------------
 
         decision_run = AgentRun(
@@ -333,13 +333,7 @@ def create_resolution_plan(
 
             parent_run_id=risk.run_id,
 
-            step_no=(
-                db.query(AgentRun)
-                .filter(
-                    AgentRun.workflow_id == workflow.workflow_id
-                )
-                .count() + 1
-            ),
+            step_no=current_max_step + 1,
 
             agent_type="DECISION",
 
@@ -362,7 +356,7 @@ def create_resolution_plan(
         db.flush()
 
         # ------------------------------------------
-        # 9. GENERATE REASONING
+        # 10. GENERATE REASONING
         # ------------------------------------------
 
         reasoning = generate_resolution_reasoning(
@@ -372,7 +366,7 @@ def create_resolution_plan(
         )
 
         # ------------------------------------------
-        # 10. DETERMINE PLAN VERSION
+        # 11. DETERMINE PLAN VERSION
         # ------------------------------------------
 
         version_no = (
@@ -384,29 +378,19 @@ def create_resolution_plan(
         )
 
         # ------------------------------------------
-        # 11. CREATE RESOLUTION PLAN
+        # 12. CREATE RESOLUTION PLAN
         # ------------------------------------------
 
         plan = ResolutionPlan(
             exception_id=exception_id,
-
-            # Reuse the risk assessment workflow.
             workflow_id=workflow.workflow_id,
-
             run_id=decision_run.run_id,
-
             investigation_id=investigation.investigation_id,
-
             risk_id=risk.risk_id,
-
             version_no=version_no,
-
             proposed_solution=rule["description"],
-
             reasoning=reasoning,
-
             priority=priority,
-
             status="PENDING_APPROVAL"
         )
 
@@ -414,18 +398,14 @@ def create_resolution_plan(
         db.flush()
 
         # ------------------------------------------
-        # 12. CREATE RECOMMENDED ACTION
+        # 13. CREATE RECOMMENDED ACTION
         # ------------------------------------------
 
         action = Action(
             plan_id=plan.plan_id,
-
             workflow_id=workflow.workflow_id,
-
             created_by_run_id=decision_run.run_id,
-
             action_type=rule["action_type"],
-
             action_description=rule["description"],
 
             action_payload={
@@ -436,9 +416,7 @@ def create_resolution_plan(
             },
 
             requires_approval=True,
-
             approval_status="PENDING",
-
             execution_status="NOT_STARTED",
 
             idempotency_key=(
@@ -451,7 +429,7 @@ def create_resolution_plan(
         db.flush()
 
         # ------------------------------------------
-        # 13. COMPLETE DECISION AGENT RUN
+        # 14. UPDATE DECISION RUN
         # ------------------------------------------
 
         completed_at = datetime.now()
@@ -477,48 +455,36 @@ def create_resolution_plan(
         decision_run.completed_at = completed_at
 
         # ------------------------------------------
-        # 14. UPDATE WORKFLOW STATUS
+        # 15. UPDATE EXCEPTION AND WORKFLOW
         # ------------------------------------------
+
+        exception.status = "AWAITING_APPROVAL"
 
         workflow.status = "WAITING_FOR_APPROVAL"
 
         workflow.current_node = "WAITING_FOR_APPROVAL"
 
         # ------------------------------------------
-        # 15. SAVE EVERYTHING
+        # 16. COMMIT
         # ------------------------------------------
 
         db.commit()
 
         return {
             "message": "Resolution plan created successfully.",
-
             "exception_id": exception_id,
-
             "workflow_id": workflow.workflow_id,
-
             "run_id": decision_run.run_id,
-
             "investigation_id": investigation.investigation_id,
-
             "risk_id": risk.risk_id,
-
             "plan_id": plan.plan_id,
-
             "action_id": action.action_id,
-
             "version_no": version_no,
-
             "priority": priority,
-
             "plan_status": plan.status,
-
             "action_type": action.action_type,
-
             "approval_status": action.approval_status,
-
             "execution_status": action.execution_status,
-
             "reasoning": reasoning
         }
 
