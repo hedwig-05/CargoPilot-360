@@ -5,9 +5,10 @@ from sqlalchemy.orm import Session
 
 from app.database.connection import get_db
 from app.auth.dependencies import get_current_user
-from app.models import Exception, ExceptionStatusHistory, User
+from app.models import Exception, ExceptionStatusHistory, User, Shipment, ShipmentEvent, Document
 from app.engines.exception_lifecycle import (
     transition_exception_status,
+    create_or_update_exception,
     ALL_EXCEPTION_STATUSES
 )
 
@@ -27,9 +28,16 @@ RESPONSE_SLA_HOURS = {
 }
 
 
+class ExceptionCreate(BaseModel):
+    exception_type: str
+    description: str = Field(min_length=1, max_length=4000)
+    severity: str = "MEDIUM"
+    event_id: int | None = None
+    document_id: int | None = None
+
+
 class ExceptionStatusUpdate(BaseModel):
     status: str
-    resolution_notes: str | None = Field(default=None, max_length=4000)
 
 
 def _risk_factor_for_exception(exception, db):
@@ -156,6 +164,69 @@ def _serialize_exception(exception, db):
         "resolved_at": exception.resolved_at,
         "total_paused_minutes": exception.total_paused_minutes,
         "sla": _sla_metrics(exception, db)
+    }
+
+
+@router.post("/shipments/{shipment_id}/exceptions", status_code=201)
+def create_manual_exception(
+    shipment_id: int,
+    data: ExceptionCreate,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    allowed_types = {
+        "DOCUMENT_MISMATCH",
+        "MISSING_DOCUMENT",
+        "SHIPMENT_DELAY",
+        "MISSING_MILESTONE",
+        "CUSTOMS_HOLD",
+        "STAKEHOLDER_RESPONSE_DELAY",
+        "CONTAINER_NOT_DISCHARGED",
+        "DAMAGE_SHORTAGE",
+        "ROLLED_CARGO"
+    }
+    if data.exception_type not in allowed_types:
+        raise HTTPException(status_code=400, detail="Unsupported exception type.")
+
+    if data.severity not in ("LOW", "MEDIUM", "HIGH", "CRITICAL"):
+        raise HTTPException(status_code=400, detail="Unsupported severity.")
+
+    shipment = db.query(Shipment).filter(Shipment.shipment_id == shipment_id).first()
+    if shipment is None:
+        raise HTTPException(status_code=404, detail="Shipment not found.")
+
+    if data.event_id is not None:
+        event = db.query(ShipmentEvent).filter(
+            ShipmentEvent.event_id == data.event_id,
+            ShipmentEvent.shipment_id == shipment_id
+        ).first()
+        if event is None:
+            raise HTTPException(status_code=400, detail="Event does not belong to this shipment.")
+
+    if data.document_id is not None:
+        document = db.query(Document).filter(
+            Document.document_id == data.document_id,
+            Document.shipment_id == shipment_id
+        ).first()
+        if document is None:
+            raise HTTPException(status_code=400, detail="Document does not belong to this shipment.")
+
+    result = create_or_update_exception(
+        db=db,
+        shipment_id=shipment_id,
+        exception_type=data.exception_type,
+        description=data.description.strip(),
+        severity=data.severity,
+        event_id=data.event_id,
+        document_id=data.document_id,
+        detected_by="OPERATIONS_USER",
+        operator_id=current_user.user_id
+    )
+    return {
+        "success": result["success"],
+        "operation": result["operation"],
+        "exception_id": result["exception_id"],
+        "message": result.get("message", "Exception recorded.")
     }
 
 
