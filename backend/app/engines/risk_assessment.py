@@ -25,7 +25,8 @@ ACTIVE_EXCEPTION_STATUSES = [
     "INVESTIGATING",
     "AWAITING_APPROVAL",
     "IN_PROGRESS",
-    "AWAITING_RESPONSE"
+    "AWAITING_RESPONSE",
+    "PENDING_3RD_PARTY"
 ]
 
 SEVERITY_WEIGHTS = {
@@ -135,7 +136,9 @@ def detect_risk_factors(db: Session, shipment_id: int):
         "ARRIVAL_DELAY": [],
         "MISSING_MILESTONE": [],
         "CUSTOMS_ISSUE": [],
-        "STAKEHOLDER_DELAY": []
+        "STAKEHOLDER_DELAY": [],
+        "DAMAGE_SHORTAGE": [],
+        "ROLLED_CARGO": []
     }
 
     # --------------------------------------------------
@@ -221,6 +224,24 @@ def detect_risk_factors(db: Session, shipment_id: int):
                     ),
                     "exception_id": item.exception_id
                 })
+
+        # Physical cargo damage or shortage
+        elif item.exception_type == "DAMAGE_SHORTAGE":
+            evidence["DAMAGE_SHORTAGE"].append({
+                "detail": description,
+                "severity": item.severity,
+                "issue_key": f"exception:{item.exception_id}",
+                "exception_id": item.exception_id
+            })
+
+        # Rolled cargo / cargo not loaded on the intended sailing
+        elif item.exception_type == "ROLLED_CARGO":
+            evidence["ROLLED_CARGO"].append({
+                "detail": description,
+                "severity": item.severity,
+                "issue_key": f"exception:{item.exception_id}",
+                "exception_id": item.exception_id
+            })
 
         # SHIPMENT DELAY
 
@@ -601,12 +622,19 @@ def calculate_risk_score(rules, evidence):
 
     total_score = Decimal("0.00")
 
+    # Preserve v1.1 scoring until a separate MISSING_DOCUMENT rule exists.
+    configured_codes = {rule.factor_code for rule in rules}
+    legacy_document_evidence = "MISSING_DOCUMENT" not in configured_codes
+
     for rule in rules:
 
         raw_evidence = evidence.get(
             rule.factor_code,
             []
         )
+
+        if rule.factor_code == "DOCUMENT_MISMATCH" and legacy_document_evidence:
+            raw_evidence = list(raw_evidence) + list(evidence.get("MISSING_DOCUMENT", []))
 
         # Remove duplicate representations.
 
