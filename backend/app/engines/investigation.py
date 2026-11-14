@@ -596,6 +596,44 @@ def investigate_exception(
             )
 
         # --------------------------------------------------
+        # --------------------------------------------------
+        # CARGO DAMAGE OR SHORTAGE
+        # --------------------------------------------------
+
+        elif exception_type == "DAMAGE_SHORTAGE":
+
+            possible_cause = "CARGO_DAMAGE_OR_QUANTITY_DISCREPANCY"
+            affected_process = "CARGO_INSPECTION"
+            summary = (
+                "A cargo damage or shortage report was investigated. "
+                "Available shipment and document records were collected, "
+                "but physical condition and quantity require operational evidence."
+            )
+            recommended_next = (
+                "Obtain the tally report, inspection or survey report, "
+                "delivery receipt and available photographs; reconcile "
+                "the actual cargo condition and quantity with the documents."
+            )
+
+        # --------------------------------------------------
+        # ROLLED CARGO
+        # --------------------------------------------------
+
+        elif exception_type == "ROLLED_CARGO":
+
+            possible_cause = "CARGO_NOT_LOADED_ON_BOOKED_SAILING"
+            affected_process = "CARRIER_BOOKING"
+            summary = (
+                "A rolled-cargo report was investigated. Confirm the "
+                "carrier's load confirmation and the shipment's revised "
+                "vessel and estimated departure details."
+            )
+            recommended_next = (
+                "Request written confirmation from the carrier or "
+                "shipping line, identify the next available sailing, "
+                "and update the shipment milestone schedule."
+            )
+
         # 11. CREATE INVESTIGATION
         # --------------------------------------------------
 
