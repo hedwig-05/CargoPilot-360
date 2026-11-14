@@ -1,50 +1,34 @@
-
 from datetime import datetime
 
 from sqlalchemy.orm import Session
 
-from app.models import Exception as ShipmentException
+from app.models import (
+    Exception as ShipmentException,
+    ExceptionStatusHistory
+)
 
-
-# ==================================================
-# ACTIVE EXCEPTION STATUSES
-# ==================================================
 
 ACTIVE_EXCEPTION_STATUSES = [
     "OPEN",
     "INVESTIGATING",
     "AWAITING_APPROVAL",
     "IN_PROGRESS",
-    "AWAITING_RESPONSE"
+    "AWAITING_RESPONSE",
+    "PENDING_3RD_PARTY"
 ]
-
-
-# ==================================================
-# EXCEPTION STATUSES PROTECTED FROM MONITORING
-# ==================================================
 
 PROTECTED_EXCEPTION_STATUSES = [
     "INVESTIGATING",
     "AWAITING_APPROVAL",
     "IN_PROGRESS",
-    "AWAITING_RESPONSE"
+    "AWAITING_RESPONSE",
+    "PENDING_3RD_PARTY"
 ]
 
+ALL_EXCEPTION_STATUSES = ACTIVE_EXCEPTION_STATUSES + ["RESOLVED", "CLOSED"]
 
-# ==================================================
-# GET ACTIVE EXCEPTION
-# ==================================================
 
-def get_active_exception(
-    db: Session,
-    shipment_id: int,
-    exception_type: str
-):
-    """
-    Retrieve an active exception for a shipment
-    and exception type.
-    """
-
+def get_active_exception(db: Session, shipment_id: int, exception_type: str):
     return (
         db.query(ShipmentException)
         .filter(
@@ -56,19 +40,7 @@ def get_active_exception(
     )
 
 
-# ==================================================
-# GET ALL ACTIVE EXCEPTIONS FOR A SHIPMENT
-# ==================================================
-
-def get_active_exceptions_for_shipment(
-    db: Session,
-    shipment_id: int
-):
-    """
-    Retrieve all active exceptions belonging
-    to a particular shipment.
-    """
-
+def get_active_exceptions_for_shipment(db: Session, shipment_id: int):
     return (
         db.query(ShipmentException)
         .filter(
@@ -80,9 +52,102 @@ def get_active_exceptions_for_shipment(
     )
 
 
-# ==================================================
-# CREATE OR UPDATE EXCEPTION
-# ==================================================
+def _minutes_between(start, end):
+    if start is None or end is None:
+        return 0
+    return max(0, int((end - start).total_seconds() // 60))
+
+
+def transition_exception_status(
+    db: Session,
+    exception_id: int,
+    new_status: str,
+    operator_id: int = None,
+    commit: bool = True
+):
+    """
+    Change an exception status and append an immutable history row.
+
+    Only PENDING_3RD_PARTY pauses the SLA clock. Existing internal states
+    such as AWAITING_APPROVAL and AWAITING_RESPONSE continue counting.
+    """
+    if new_status not in ALL_EXCEPTION_STATUSES:
+        raise ValueError(f"Unsupported exception status: {new_status}")
+
+    exception = (
+        db.query(ShipmentException)
+        .filter(ShipmentException.exception_id == exception_id)
+        .with_for_update()
+        .first()
+    )
+    if exception is None:
+        raise ValueError(f"Exception ID {exception_id} not found.")
+
+    old_status = exception.status
+    if old_status == new_status:
+        return {
+            "success": True,
+            "message": "Exception already has the requested status.",
+            "exception_id": exception_id,
+            "status": old_status
+        }
+
+    if old_status in ("RESOLVED", "CLOSED"):
+        raise ValueError("A resolved or closed exception cannot be reopened.")
+
+    changed_at = datetime.now()
+
+    # Leaving an external-wait state closes the most recent pause interval.
+    if old_status == "PENDING_3RD_PARTY":
+        pause_started = (
+            db.query(ExceptionStatusHistory)
+            .filter(
+                ExceptionStatusHistory.exception_id == exception_id,
+                ExceptionStatusHistory.new_status == "PENDING_3RD_PARTY"
+            )
+            .order_by(ExceptionStatusHistory.changed_at.desc(),
+                      ExceptionStatusHistory.log_id.desc())
+            .first()
+        )
+        if pause_started:
+            exception.total_paused_minutes = (
+                (exception.total_paused_minutes or 0)
+                + _minutes_between(pause_started.changed_at, changed_at)
+            )
+
+    if new_status == "INVESTIGATING" and exception.acknowledged_at is None:
+        exception.acknowledged_at = changed_at
+
+    exception.status = new_status
+
+    if new_status == "RESOLVED":
+        exception.resolved_at = changed_at
+
+    db.add(ExceptionStatusHistory(
+        exception_id=exception_id,
+        old_status=old_status,
+        new_status=new_status,
+        changed_at=changed_at,
+        operator_id=operator_id
+    ))
+
+    if commit:
+        db.commit()
+        db.refresh(exception)
+    else:
+        db.flush()
+
+    return {
+        "success": True,
+        "exception_id": exception.exception_id,
+        "old_status": old_status,
+        "status": exception.status,
+        "changed_at": changed_at,
+        "acknowledged_at": exception.acknowledged_at,
+        "resolved_at": exception.resolved_at,
+        "total_paused_minutes": exception.total_paused_minutes
+    }
+
 
 def create_or_update_exception(
     db: Session,
@@ -95,55 +160,23 @@ def create_or_update_exception(
     detected_by: str = "MONITORING_AGENT",
     commit: bool = True
 ):
-    """
-    Create an exception if one does not exist.
-
-    Update an existing OPEN exception.
-
-    Preserve exceptions already being handled
-    by investigation, approval or execution workflows.
-
-    Returns CREATED, UPDATED or SKIPPED.
-    """
-
     try:
-
-        existing = get_active_exception(
-            db=db,
-            shipment_id=shipment_id,
-            exception_type=exception_type
-        )
-
-        # ------------------------------------------
-        # EXISTING EXCEPTION FOUND
-        # ------------------------------------------
+        existing = get_active_exception(db, shipment_id, exception_type)
 
         if existing:
-
-            # Do not overwrite an exception that
-            # another workflow is already handling.
-
             if existing.status in PROTECTED_EXCEPTION_STATUSES:
-
                 return {
                     "success": True,
                     "operation": "SKIPPED",
                     "exception_id": existing.exception_id,
                     "exception": existing,
-                    "message": (
-                        "Existing exception is being handled "
-                        "by another workflow."
-                    )
+                    "message": "Existing exception is being handled by another workflow."
                 }
-
-            # Only OPEN exceptions can be updated.
 
             existing.description = description
             existing.severity = severity
-
             if document_id is not None:
                 existing.document_id = document_id
-
             if event_id is not None:
                 existing.event_id = event_id
 
@@ -160,10 +193,6 @@ def create_or_update_exception(
                 "exception": existing
             }
 
-        # ------------------------------------------
-        # CREATE NEW EXCEPTION
-        # ------------------------------------------
-
         new_exception = ShipmentException(
             shipment_id=shipment_id,
             exception_type=exception_type,
@@ -174,13 +203,23 @@ def create_or_update_exception(
             event_id=event_id,
             detected_by=detected_by
         )
-
         db.add(new_exception)
         db.flush()
+
+        # Record the initial state as the first ledger entry.
+        db.add(ExceptionStatusHistory(
+            exception_id=new_exception.exception_id,
+            old_status=None,
+            new_status="OPEN",
+            changed_at=new_exception.detected_at or datetime.now(),
+            operator_id=None
+        ))
 
         if commit:
             db.commit()
             db.refresh(new_exception)
+        else:
+            db.flush()
 
         return {
             "success": True,
@@ -194,55 +233,30 @@ def create_or_update_exception(
         raise
 
 
-# ==================================================
-# RESOLVE EXCEPTION
-# ==================================================
-
 def resolve_exception(
     db: Session,
     exception_id: int,
     resolution_notes: str,
     verified: bool = False,
-    commit: bool = True
+    commit: bool = True,
+    operator_id: int = None
 ):
-    """
-    Resolve an exception only after verification.
-
-    The caller must supply verification evidence
-    before setting verified=True.
-
-    IMPORTANT:
-    verified=True is a caller assertion, not an
-    automatic verification of the underlying issue.
-    """
-
     if not verified:
-        raise ValueError(
-            "Exception cannot be resolved without verification."
-        )
-
+        raise ValueError("Exception cannot be resolved without verification.")
     if not resolution_notes or not resolution_notes.strip():
-        raise ValueError(
-            "Resolution notes are required."
-        )
+        raise ValueError("Resolution notes are required.")
 
     try:
-
         exception = (
             db.query(ShipmentException)
-            .filter(
-                ShipmentException.exception_id == exception_id
-            )
+            .filter(ShipmentException.exception_id == exception_id)
             .with_for_update()
             .first()
         )
+        if exception is None:
+            raise ValueError(f"Exception ID {exception_id} not found.")
 
-        if not exception:
-            raise ValueError(
-                f"Exception ID {exception_id} not found."
-            )
-
-        if exception.status in ["RESOLVED", "CLOSED"]:
+        if exception.status in ("RESOLVED", "CLOSED"):
             return {
                 "success": True,
                 "message": "Exception is already resolved.",
@@ -250,23 +264,16 @@ def resolve_exception(
                 "status": exception.status
             }
 
-        exception.status = "RESOLVED"
-        exception.resolved_at = datetime.now()
         exception.resolution_notes = resolution_notes.strip()
-
-        if commit:
-            db.commit()
-            db.refresh(exception)
-        else:
-            db.flush()
-
-        return {
-            "success": True,
-            "message": "Exception resolved successfully.",
-            "exception_id": exception.exception_id,
-            "status": exception.status,
-            "resolved_at": exception.resolved_at
-        }
+        result = transition_exception_status(
+            db=db,
+            exception_id=exception_id,
+            new_status="RESOLVED",
+            operator_id=operator_id,
+            commit=commit
+        )
+        result["message"] = "Exception resolved successfully."
+        return result
 
     except Exception:
         db.rollback()
