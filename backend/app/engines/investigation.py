@@ -3,6 +3,8 @@ from datetime import datetime
 
 from sqlalchemy.orm import Session
 
+from app.engines.exception_lifecycle import transition_exception_status
+
 from app.models import (
     Shipment,
     ShipmentEvent,
@@ -826,7 +828,12 @@ def investigate_exception(
 
         if exception.status == "OPEN":
 
-            exception.status = "INVESTIGATING"
+            transition_exception_status(
+                db=db,
+                exception_id=exception.exception_id,
+                new_status="INVESTIGATING",
+                commit=False
+            )
 
         # --------------------------------------------------
         # 20. COMMIT
