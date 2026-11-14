@@ -161,7 +161,8 @@ def create_or_update_exception(
     document_id: int = None,
     event_id: int = None,
     detected_by: str = "MONITORING_AGENT",
-    commit: bool = True
+    commit: bool = True,
+    operator_id: int = None
 ):
     try:
         existing = get_active_exception(db, shipment_id, exception_type)
@@ -215,7 +216,7 @@ def create_or_update_exception(
             old_status=None,
             new_status="OPEN",
             changed_at=new_exception.detected_at or datetime.now(),
-            operator_id=None
+            operator_id=operator_id
         ))
 
         if commit:
