@@ -1,4 +1,5 @@
 
+from datetime import datetime
 from decimal import Decimal
 
 from sqlalchemy.orm import Session
@@ -82,6 +83,35 @@ def get_active_risk_configuration(db: Session):
     return configuration, rules
 
 
+def get_overdue_event_factor(event, now=None):
+    """
+    Return the risk category for a pending milestone whose expected
+    time has passed. Completed, future, and non-pending events are ignored.
+
+    Database DateTime values in this project are naive datetimes, so
+    the comparison uses a naive local datetime consistently.
+    """
+
+    if event.event_status != "PENDING":
+        return None
+
+    if event.expected_time is None:
+        return None
+
+    current_time = now or datetime.now()
+
+    if event.expected_time >= current_time:
+        return None
+
+    if event.event_type == "CUSTOMS_CLEARED":
+        return "CUSTOMS_ISSUE"
+
+    if event.event_type == "VESSEL_ARRIVED":
+        return "ARRIVAL_DELAY"
+
+    return "MISSING_MILESTONE"
+
+
 # ==================================================
 # DETECT RISK FACTORS
 # ==================================================
@@ -92,6 +122,7 @@ def detect_risk_factors(db: Session, shipment_id: int):
 
     Risk factors:
     - DOCUMENT_MISMATCH
+    - MISSING_DOCUMENT
     - ARRIVAL_DELAY
     - MISSING_MILESTONE
     - CUSTOMS_ISSUE
@@ -100,6 +131,7 @@ def detect_risk_factors(db: Session, shipment_id: int):
 
     evidence = {
         "DOCUMENT_MISMATCH": [],
+        "MISSING_DOCUMENT": [],
         "ARRIVAL_DELAY": [],
         "MISSING_MILESTONE": [],
         "CUSTOMS_ISSUE": [],
@@ -179,7 +211,9 @@ def detect_risk_factors(db: Session, shipment_id: int):
 
             else:
 
-                evidence["DOCUMENT_MISMATCH"].append({
+                # A missing required document is a separate risk category
+                # from conflicting values inside submitted documents.
+                evidence["MISSING_DOCUMENT"].append({
                     "detail": description,
                     "severity": item.severity,
                     "issue_key": (
@@ -363,6 +397,24 @@ def detect_risk_factors(db: Session, shipment_id: int):
             evidence["ARRIVAL_DELAY"].append({
                 "detail": (
                     "Vessel arrival event is marked LATE."
+                ),
+                "severity": "MEDIUM",
+                "issue_key": f"event:{item.event_id}",
+                "event_id": item.event_id
+            })
+
+        # A pending milestone whose expected time has passed is overdue.
+        # Classify it by operational stage rather than treating every
+        # overdue event as a generic missing milestone.
+
+        overdue_factor = get_overdue_event_factor(item)
+
+        if overdue_factor:
+
+            evidence[overdue_factor].append({
+                "detail": (
+                    f"{item.event_type} milestone is overdue. "
+                    f"Expected completion: {item.expected_time}."
                 ),
                 "severity": "MEDIUM",
                 "issue_key": f"event:{item.event_id}",

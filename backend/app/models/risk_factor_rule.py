@@ -27,6 +27,7 @@ class RiskFactorRule(Base):
     factor_code = Column(
         Enum(
             "DOCUMENT_MISMATCH",
+            "MISSING_DOCUMENT",
             "ARRIVAL_DELAY",
             "MISSING_MILESTONE",
             "CUSTOMS_ISSUE",
