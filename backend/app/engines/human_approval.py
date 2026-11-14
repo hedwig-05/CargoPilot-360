@@ -93,6 +93,11 @@ def get_pending_action(db: Session, action_id: int):
             "The resolution plan associated with this action was not found."
         )
 
+    if plan.workflow_id != action.workflow_id:
+        raise ValueError(
+            "The action and resolution plan belong to different workflows."
+        )
+
     if plan.status != "PENDING_APPROVAL":
         raise ValueError(
             f"The resolution plan is not awaiting approval. "
@@ -282,7 +287,7 @@ def reject_action(
         workflow.current_node = "REJECTED"
         workflow.completed_at = current_time
 
-                # Notify dependent workflows about rejection.
+        # Notify dependent workflows about rejection.
         dependent_count = update_dependent_workflows(
             db=db,
             parent_workflow_id=workflow.workflow_id,
