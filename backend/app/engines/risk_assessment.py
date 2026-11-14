@@ -122,6 +122,7 @@ def detect_risk_factors(db: Session, shipment_id: int):
 
     Risk factors:
     - DOCUMENT_MISMATCH
+    - MISSING_DOCUMENT
     - ARRIVAL_DELAY
     - MISSING_MILESTONE
     - CUSTOMS_ISSUE
@@ -130,6 +131,7 @@ def detect_risk_factors(db: Session, shipment_id: int):
 
     evidence = {
         "DOCUMENT_MISMATCH": [],
+        "MISSING_DOCUMENT": [],
         "ARRIVAL_DELAY": [],
         "MISSING_MILESTONE": [],
         "CUSTOMS_ISSUE": [],
@@ -209,7 +211,9 @@ def detect_risk_factors(db: Session, shipment_id: int):
 
             else:
 
-                evidence["DOCUMENT_MISMATCH"].append({
+                # A missing required document is a separate risk category
+                # from conflicting values inside submitted documents.
+                evidence["MISSING_DOCUMENT"].append({
                     "detail": description,
                     "severity": item.severity,
                     "issue_key": (
