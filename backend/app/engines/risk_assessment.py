@@ -1033,3 +1033,149 @@ def assess_shipment_risk(
         db.rollback()
 
         raise
+
+
+
+# ==================================================
+# PREVIEW SHIPMENT RISK WITH A DRAFT CONFIGURATION
+# ==================================================
+
+def preview_shipment_risk(
+    db: Session,
+    shipment_id: int,
+    configuration_id: int
+):
+    """
+    Calculate a shipment's risk using a selected DRAFT configuration.
+
+    This is a read-only preview:
+    - It does not create a RiskAssessment.
+    - It does not create RiskAssessmentFactor rows.
+    - It does not update the shipment's current risk fields.
+    - It does not change configuration statuses.
+    """
+
+    shipment = (
+        db.query(Shipment)
+        .filter(Shipment.shipment_id == shipment_id)
+        .first()
+    )
+
+    if not shipment:
+        raise ValueError(
+            f"Shipment {shipment_id} was not found."
+        )
+
+    if shipment.status == "CANCELLED":
+        raise ValueError(
+            "Cannot preview risk for a cancelled shipment."
+        )
+
+    configuration = (
+        db.query(RiskConfiguration)
+        .filter(
+            RiskConfiguration.configuration_id == configuration_id
+        )
+        .first()
+    )
+
+    if not configuration:
+        raise ValueError(
+            f"Risk configuration {configuration_id} was not found."
+        )
+
+    if configuration.status != "DRAFT":
+        raise ValueError(
+            "Risk preview only accepts DRAFT configurations. "
+            "Use the normal calculation endpoint for the active configuration."
+        )
+
+    rules = (
+        db.query(RiskFactorRule)
+        .filter(
+            RiskFactorRule.configuration_id == configuration_id,
+            RiskFactorRule.is_enabled.is_(True)
+        )
+        .order_by(RiskFactorRule.rule_id.asc())
+        .all()
+    )
+
+    if not rules:
+        raise ValueError(
+            "The selected draft configuration has no enabled rules."
+        )
+
+    enabled_weight_total = sum(
+        (Decimal(str(rule.weight)) for rule in rules),
+        Decimal("0.00")
+    )
+
+    if enabled_weight_total != Decimal("100.00"):
+        raise ValueError(
+            "Enabled risk factor weights must total 100 before preview."
+        )
+
+    evidence = detect_risk_factors(
+        db,
+        shipment_id
+    )
+
+    risk_score, factor_results = calculate_risk_score(
+        rules,
+        evidence
+    )
+
+    risk_level = determine_risk_level(
+        risk_score,
+        configuration
+    )
+
+    previous_assessment = (
+        db.query(RiskAssessment)
+        .filter(
+            RiskAssessment.shipment_id == shipment_id
+        )
+        .order_by(
+            RiskAssessment.assessed_at.desc(),
+            RiskAssessment.risk_id.desc()
+        )
+        .first()
+    )
+
+    previous_score = (
+        previous_assessment.risk_score
+        if previous_assessment
+        else None
+    )
+
+    explanation_parts = []
+
+    for factor in factor_results:
+        if factor["points_awarded"] > 0:
+            explanation_parts.append(
+                f"{factor['factor_code']}: "
+                f"{factor['points_awarded']:.2f} points"
+            )
+
+    explanation = (
+        "; ".join(explanation_parts)
+        if explanation_parts
+        else "No active risk evidence detected."
+    )
+
+    return {
+        "success": True,
+        "preview_only": True,
+        "saved": False,
+        "shipment_id": shipment_id,
+        "shipment_ref": shipment.shipment_ref,
+        "configuration_id": configuration.configuration_id,
+        "configuration_version": configuration.version,
+        "configuration_status": configuration.status,
+        "risk_score": risk_score,
+        "risk_level": risk_level,
+        "previous_saved_score": previous_score,
+        "assessment_method": "RULES_PREVIEW",
+        "explanation": explanation,
+        "factors": factor_results
+    }
