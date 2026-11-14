@@ -243,10 +243,13 @@ def create_resolution_plan(
         # 4. GET MATCHING RISK ASSESSMENT
         # ------------------------------------------
 
+        # Risk assessment is shipment-level.
+        # One assessment can support multiple exceptions
+        # within the same workflow.
+
         risk = (
             db.query(RiskAssessment)
             .filter(
-                RiskAssessment.exception_id == exception_id,
                 RiskAssessment.workflow_id == investigation.workflow_id,
                 RiskAssessment.shipment_id == exception.shipment_id
             )

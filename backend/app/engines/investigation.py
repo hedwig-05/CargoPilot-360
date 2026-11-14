@@ -28,11 +28,16 @@ def investigate_exception(
     """
     Investigate a logistics exception.
 
-    Collects confirmed facts from shipment records,
-    events, documents, validations and the exception.
+    Collects shipment, event, document, validation and
+    exception evidence.
 
-    Identifies possible causes and stores investigation
-    evidence using the actual database model structure.
+    Document handling:
+    - Identifies the latest version of each document type.
+    - Separates current validation results from historical ones.
+    - Preserves historical mismatches as historical evidence.
+    - Does not mistake a corrected historical mismatch
+      for a current document mismatch.
+    - Identifies distinct historical mismatch patterns.
     """
 
     try:
@@ -52,6 +57,7 @@ def investigate_exception(
         )
 
         if not exception:
+
             raise LookupError(
                 f"Exception {exception_id} was not found."
             )
@@ -61,6 +67,7 @@ def investigate_exception(
         # --------------------------------------------------
 
         if workflow_id is None or run_id is None:
+
             raise ValueError(
                 "workflow_id and run_id are required."
             )
@@ -78,12 +85,13 @@ def investigate_exception(
         )
 
         if not shipment:
+
             raise LookupError(
                 f"Shipment {exception.shipment_id} was not found."
             )
 
         # --------------------------------------------------
-        # 4. COLLECT RELATED RECORDS
+        # 4. COLLECT RELATED EVENTS
         # --------------------------------------------------
 
         events = (
@@ -91,34 +99,208 @@ def investigate_exception(
             .filter(
                 ShipmentEvent.shipment_id == shipment.shipment_id
             )
+            .order_by(
+                ShipmentEvent.event_id.asc()
+            )
             .all()
         )
+
+        # --------------------------------------------------
+        # 5. COLLECT ALL DOCUMENT VERSIONS
+        # --------------------------------------------------
 
         documents = (
             db.query(Document)
             .filter(
                 Document.shipment_id == shipment.shipment_id
             )
+            .order_by(
+                Document.document_type.asc(),
+                Document.version_no.desc(),
+                Document.upload_date.desc(),
+                Document.document_id.desc()
+            )
             .all()
         )
+
+        # --------------------------------------------------
+        # 6. IDENTIFY LATEST DOCUMENT PER TYPE
+        # --------------------------------------------------
+
+        latest_documents = {}
+
+        for document in documents:
+
+            if document.document_type not in latest_documents:
+
+                latest_documents[document.document_type] = document
+
+        current_documents = list(
+            latest_documents.values()
+        )
+
+        current_document_ids = {
+            document.document_id
+            for document in current_documents
+        }
+
+        historical_documents = [
+            document
+            for document in documents
+            if document.document_id not in current_document_ids
+        ]
+
+        # --------------------------------------------------
+        # 7. COLLECT VALIDATION HISTORY
+        # --------------------------------------------------
 
         validations = (
             db.query(DocumentValidation)
-            .join(
-                Document,
-                DocumentValidation.document_id == Document.document_id
-            )
             .filter(
-                Document.shipment_id == shipment.shipment_id
+                DocumentValidation.shipment_id == shipment.shipment_id
+            )
+            .order_by(
+                DocumentValidation.validated_at.asc(),
+                DocumentValidation.validation_id.asc()
             )
             .all()
         )
 
+        # A validation belongs to the current document state
+        # only when its document_id is a latest document ID
+        # and its compared document is either absent or also
+        # a latest document ID.
+
+        current_validations = [
+            validation
+            for validation in validations
+            if (
+                validation.document_id in current_document_ids
+                and (
+                    validation.compared_document_id is None
+                    or validation.compared_document_id
+                    in current_document_ids
+                )
+            )
+        ]
+
+        historical_validations = [
+            validation
+            for validation in validations
+            if validation not in current_validations
+        ]
+
         # --------------------------------------------------
-        # 5. IDENTIFY POSSIBLE CAUSE
+        # 8. IDENTIFY CURRENT AND HISTORICAL MISMATCHES
         # --------------------------------------------------
 
-        exception_type = str(exception.exception_type).upper()
+        current_mismatches = [
+            validation
+            for validation in current_validations
+            if str(
+                validation.validation_result
+            ).upper() == "MISMATCH"
+        ]
+
+        historical_mismatches = [
+            validation
+            for validation in historical_validations
+            if str(
+                validation.validation_result
+            ).upper() == "MISMATCH"
+        ]
+
+        # Current document statuses are also considered.
+
+        current_status_mismatches = [
+            document
+            for document in current_documents
+            if str(
+                document.validation_status
+            ).upper() == "MISMATCH"
+        ]
+
+        # --------------------------------------------------
+        # 8A. IDENTIFY DISTINCT HISTORICAL MISMATCH PATTERNS
+        # --------------------------------------------------
+
+        historical_mismatch_fields = sorted({
+            str(validation.field_name).strip().upper()
+            for validation in historical_mismatches
+        })
+
+        # Reverse-direction validation records represent
+        # the same mismatch pattern.
+        #
+        # Example:
+        # WRONG1234567 vs TEST1234567
+        # TEST1234567 vs WRONG1234567
+        #
+        # Sorting the values makes both records produce
+        # the same pattern.
+
+        historical_mismatch_patterns = {
+            (
+                str(validation.field_name).strip().upper(),
+                tuple(sorted([
+                    str(validation.extracted_value).strip().upper(),
+                    str(validation.expected_value).strip().upper()
+                ]))
+            )
+            for validation in historical_mismatches
+        }
+
+        historical_discrepancy_count = len(
+            historical_mismatch_patterns
+        )
+
+        # --------------------------------------------------
+        # 9. CHECK CURRENT DOCUMENT COMPLETENESS
+        # --------------------------------------------------
+
+        required_document_types = {
+            "COMMERCIAL_INVOICE",
+            "BILL_OF_LADING"
+        }
+
+        missing_document_types = (
+            required_document_types
+            - set(latest_documents.keys())
+        )
+
+        documents_with_extraction_issues = [
+            document
+            for document in current_documents
+            if str(
+                document.extraction_status
+            ).upper() != "EXTRACTED"
+        ]
+
+        documents_with_validation_issues = [
+            document
+            for document in current_documents
+            if str(
+                document.validation_status
+            ).upper() in (
+                "MISMATCH",
+                "INCOMPLETE",
+                "NOT_VALIDATED"
+            )
+        ]
+
+        current_documents_valid = (
+            not missing_document_types
+            and not documents_with_extraction_issues
+            and not documents_with_validation_issues
+        )
+
+        # --------------------------------------------------
+        # 10. INITIAL INVESTIGATION FINDINGS
+        # --------------------------------------------------
+
+        exception_type = str(
+            exception.exception_type
+        ).upper()
 
         possible_cause = "REQUIRES_MANUAL_REVIEW"
 
@@ -126,25 +308,15 @@ def investigate_exception(
 
         summary = (
             f"Investigation of exception {exception_id} "
-            f"collected shipment, event, document and "
-            f"validation evidence."
+            f"collected {len(events)} shipment events, "
+            f"{len(documents)} document versions and "
+            f"{len(validations)} validation records."
         )
 
         recommended_next = (
             "Review the collected evidence and determine "
             "the appropriate corrective action."
         )
-
-        # Find actual document mismatches.
-        # DocumentValidation uses validation_result.
-
-        mismatches = [
-            validation
-            for validation in validations
-            if str(
-                getattr(validation, "validation_result", "UNKNOWN")
-            ).upper() == "MISMATCH"
-        ]
 
         # --------------------------------------------------
         # DOCUMENT MISMATCH
@@ -154,36 +326,117 @@ def investigate_exception(
 
             affected_process = "DOCUMENT_VALIDATION"
 
-            if mismatches:
+            if current_mismatches or current_status_mismatches:
 
-                fields = sorted({
-                    str(
-                        getattr(validation, "field_name", "unknown")
-                    )
-                    for validation in mismatches
+                mismatch_fields = sorted({
+                    str(validation.field_name)
+                    for validation in current_mismatches
                 })
 
+                mismatch_document_types = sorted({
+                    str(document.document_type)
+                    for document in current_status_mismatches
+                })
+
+                details = []
+
+                if mismatch_fields:
+
+                    details.append(
+                        "Affected fields: "
+                        + ", ".join(mismatch_fields)
+                    )
+
+                if mismatch_document_types:
+
+                    details.append(
+                        "Documents with current MISMATCH status: "
+                        + ", ".join(mismatch_document_types)
+                    )
+
                 possible_cause = (
-                    "INCONSISTENT_DOCUMENT_INFORMATION: "
-                    + ", ".join(fields)
+                    "CURRENT_DOCUMENT_MISMATCH"
                 )
 
                 summary = (
-                    "Inconsistent information was found "
-                    "in document validation results. "
-                    "Mismatched fields: "
-                    + ", ".join(fields)
+                    "The latest available document versions "
+                    "still contain validation mismatches. "
+                    + ". ".join(details)
                 )
 
                 recommended_next = (
-                    "Request corrected shipping documents "
-                    "from the responsible stakeholder."
+                    "Request corrected document versions "
+                    "from the responsible stakeholder and "
+                    "revalidate the affected documents."
+                )
+
+            elif (
+                historical_mismatches
+                and current_documents_valid
+            ):
+
+                possible_cause = (
+                    "HISTORICAL_DOCUMENT_MISMATCH_CORRECTED"
+                )
+
+                summary = (
+                    "Historical document versions contained "
+                    f"{len(historical_mismatches)} mismatch "
+                    "validation records representing "
+                    f"{historical_discrepancy_count} distinct "
+                    "mismatch pattern(s) across "
+                    f"{len(historical_mismatch_fields)} "
+                    "affected field(s): "
+                    + ", ".join(historical_mismatch_fields)
+                    + ". However, the latest available document "
+                    "versions have successful extraction and "
+                    "VALID status. The historical mismatch is "
+                    "not present in the current document versions."
+                )
+
+                recommended_next = (
+                    "Review the correction history and verify "
+                    "that the previous document mismatch "
+                    "has been formally resolved."
+                )
+
+            elif historical_mismatches:
+
+                possible_cause = (
+                    "HISTORICAL_DOCUMENT_MISMATCH_WITH "
+                    "_CURRENT_STATE_REQUIRING_REVIEW"
+                )
+
+                summary = (
+                    "Historical document mismatches were found. "
+                    "The latest document versions do not provide "
+                    "enough evidence to confirm that the issue "
+                    "has been corrected."
+                )
+
+                recommended_next = (
+                    "Review the latest document versions, "
+                    "complete extraction or validation where "
+                    "necessary, and verify the correction."
                 )
 
             else:
 
                 possible_cause = (
-                    "DOCUMENT_MISMATCH_REQUIRES_REVIEW"
+                    "DOCUMENT_MISMATCH_REQUIRES_REVALIDATION"
+                )
+
+                summary = (
+                    "The original document mismatch exception "
+                    "was investigated, but no matching mismatch "
+                    "was found in the available validation "
+                    "history. Further verification is required."
+                )
+
+                recommended_next = (
+                    "Run document validation against the "
+                    "latest invoice and bill of lading, then "
+                    "review the results."
                 )
 
         # --------------------------------------------------
@@ -192,19 +445,39 @@ def investigate_exception(
 
         elif exception_type == "MISSING_DOCUMENT":
 
-            possible_cause = "REQUIRED_DOCUMENT_MISSING"
-
             affected_process = "DOCUMENT_COLLECTION"
 
-            summary = (
-                "A required shipment document is missing. "
-                "The available shipment documents were reviewed."
-            )
+            if missing_document_types:
 
-            recommended_next = (
-                "Request the missing document from the "
-                "responsible stakeholder."
-            )
+                possible_cause = "REQUIRED_DOCUMENT_MISSING"
+
+                summary = (
+                    "The following required document types "
+                    "are missing: "
+                    + ", ".join(sorted(missing_document_types))
+                )
+
+                recommended_next = (
+                    "Request the missing documents from "
+                    "the responsible stakeholder."
+                )
+
+            else:
+
+                possible_cause = (
+                    "REQUIRED_DOCUMENTS_CURRENTLY_AVAILABLE"
+                )
+
+                summary = (
+                    "The required document types are currently "
+                    "available. Their latest versions and "
+                    "processing statuses were reviewed."
+                )
+
+                recommended_next = (
+                    "Verify that the latest required documents "
+                    "are successfully extracted and validated."
+                )
 
         # --------------------------------------------------
         # SHIPMENT DELAY
@@ -223,23 +496,29 @@ def investigate_exception(
                 and event.expected_time < current_time
             ]
 
-            possible_cause = (
-                "OVERDUE_SHIPMENT_MILESTONE"
-                if overdue_events
-                else "SHIPMENT_DELAY_REQUIRES_REVIEW"
-            )
+            if overdue_events:
+
+                possible_cause = (
+                    "OVERDUE_SHIPMENT_MILESTONE"
+                )
+
+            else:
+
+                possible_cause = (
+                    "SHIPMENT_DELAY_REQUIRES_REVIEW"
+                )
 
             affected_process = "SHIPMENT_MONITORING"
 
             summary = (
                 f"Shipment delay investigated. "
-                f"{len(overdue_events)} overdue milestone "
-                f"records were identified."
+                f"{len(overdue_events)} currently overdue "
+                f"milestone records were identified."
             )
 
             recommended_next = (
-                "Contact the operations officer to verify "
-                "the shipment status and expected arrival."
+                "Verify the shipment progress with the "
+                "responsible logistics stakeholder."
             )
 
         # --------------------------------------------------
@@ -252,8 +531,15 @@ def investigate_exception(
 
             affected_process = "CUSTOMS_CLEARANCE"
 
+            summary = (
+                "A customs hold exception was investigated. "
+                "Further verification of customs clearance "
+                "status is required."
+            )
+
             recommended_next = (
-                "Escalate the customs hold for further review."
+                "Escalate the customs hold to the customs "
+                "clearance team for review."
             )
 
         # --------------------------------------------------
@@ -262,7 +548,9 @@ def investigate_exception(
 
         elif exception_type == "MISSING_MILESTONE":
 
-            possible_cause = "SHIPMENT_MILESTONE_NOT_RECORDED"
+            possible_cause = (
+                "SHIPMENT_MILESTONE_NOT_RECORDED"
+            )
 
             affected_process = "SHIPMENT_MONITORING"
 
@@ -272,7 +560,41 @@ def investigate_exception(
             )
 
         # --------------------------------------------------
-        # 6. CREATE INVESTIGATION
+        # STAKEHOLDER RESPONSE DELAY
+        # --------------------------------------------------
+
+        elif exception_type == "STAKEHOLDER_RESPONSE_DELAY":
+
+            possible_cause = (
+                "STAKEHOLDER_RESPONSE_OVERDUE"
+            )
+
+            affected_process = "STAKEHOLDER_COORDINATION"
+
+            recommended_next = (
+                "Follow up with the responsible stakeholder "
+                "and escalate if necessary."
+            )
+
+        # --------------------------------------------------
+        # CONTAINER NOT DISCHARGED
+        # --------------------------------------------------
+
+        elif exception_type == "CONTAINER_NOT_DISCHARGED":
+
+            possible_cause = (
+                "CONTAINER_DISCHARGE_NOT_CONFIRMED"
+            )
+
+            affected_process = "PORT_OPERATIONS"
+
+            recommended_next = (
+                "Verify container discharge status with "
+                "the port or terminal operator."
+            )
+
+        # --------------------------------------------------
+        # 11. CREATE INVESTIGATION
         # --------------------------------------------------
 
         investigation = Investigation(
@@ -292,7 +614,7 @@ def investigate_exception(
         db.flush()
 
         # --------------------------------------------------
-        # 7. HELPER TO SAVE EVIDENCE
+        # 12. HELPER TO SAVE EVIDENCE
         # --------------------------------------------------
 
         evidence_count = 0
@@ -311,8 +633,6 @@ def investigate_exception(
 
             nonlocal evidence_count
 
-            # Exactly one evidence source must be provided.
-
             sources = [
                 shipment_id,
                 event_id,
@@ -329,7 +649,8 @@ def investigate_exception(
             ) != 1:
 
                 raise ValueError(
-                    "Each evidence record must have exactly one source ID."
+                    "Each evidence record must have "
+                    "exactly one source ID."
                 )
 
             evidence = InvestigationEvidence(
@@ -350,20 +671,22 @@ def investigate_exception(
             evidence_count += 1
 
         # --------------------------------------------------
-        # 8. SHIPMENT EVIDENCE
+        # 13. SHIPMENT EVIDENCE
         # --------------------------------------------------
 
         save_evidence(
             evidence_class="CONFIRMED_FACT",
             statement=(
                 f"Shipment record exists with shipment ID "
-                f"{shipment.shipment_id}."
+                f"{shipment.shipment_id}, reference "
+                f"{shipment.shipment_ref}, and status "
+                f"{shipment.status}."
             ),
             shipment_id=shipment.shipment_id
         )
 
         # --------------------------------------------------
-        # 9. EVENT EVIDENCE
+        # 14. EVENT EVIDENCE
         # --------------------------------------------------
 
         for event in events:
@@ -373,59 +696,101 @@ def investigate_exception(
                 statement=(
                     f"Shipment event ID {event.event_id} "
                     f"has status "
-                    f"{getattr(event, 'event_status', 'UNKNOWN')}."
+                    f"{getattr(event, 'event_status', 'UNKNOWN')}. "
+                    f"Expected time: "
+                    f"{getattr(event, 'expected_time', None)}. "
+                    f"Actual time: "
+                    f"{getattr(event, 'actual_time', None)}."
                 ),
                 event_id=event.event_id
             )
 
         # --------------------------------------------------
-        # 10. DOCUMENT EVIDENCE
+        # 15. CURRENT AND HISTORICAL DOCUMENT EVIDENCE
         # --------------------------------------------------
 
         for document in documents:
 
+            is_current = (
+                document.document_id in current_document_ids
+            )
+
+            version_label = (
+                "CURRENT LATEST VERSION"
+                if is_current
+                else "HISTORICAL VERSION"
+            )
+
             save_evidence(
                 evidence_class="CONFIRMED_FACT",
                 statement=(
-                    f"Document ID {document.document_id} "
-                    f"of type "
-                    f"{getattr(document, 'document_type', 'UNKNOWN')} "
-                    f"exists for this shipment."
+                    f"{version_label}: Document ID "
+                    f"{document.document_id}, type "
+                    f"{document.document_type}, version "
+                    f"{document.version_no}, extraction status "
+                    f"{document.extraction_status}, validation "
+                    f"status {document.validation_status}."
                 ),
                 document_id=document.document_id
             )
 
         # --------------------------------------------------
-        # 11. VALIDATION EVIDENCE
+        # 16. VALIDATION EVIDENCE
         # --------------------------------------------------
 
         for validation in validations:
 
-            # Correct model attribute: validation_result.
+            is_current = (
+                validation in current_validations
+            )
 
             validation_status = str(
-                getattr(validation, "validation_result", "UNKNOWN")
+                validation.validation_result
             ).upper()
+
+            version_label = (
+                "CURRENT DOCUMENT VALIDATION"
+                if is_current
+                else "HISTORICAL DOCUMENT VALIDATION"
+            )
 
             evidence_class = (
                 "CONFIRMED_FACT"
-                if validation_status in ("MATCH", "MISMATCH")
+                if validation_status in (
+                    "MATCH",
+                    "MISMATCH"
+                )
                 else "POSSIBLE_EXPLANATION"
             )
+
+            compared_document_text = ""
+
+            if validation.compared_document_id is not None:
+
+                compared_document_text = (
+                    f" Compared document ID: "
+                    f"{validation.compared_document_id}."
+                )
 
             save_evidence(
                 evidence_class=evidence_class,
                 statement=(
-                    f"Document validation ID "
+                    f"{version_label}: Validation ID "
                     f"{validation.validation_id} returned "
                     f"{validation_status} for field "
-                    f"{getattr(validation, 'field_name', 'UNKNOWN')}."
+                    f"{validation.field_name}. "
+                    f"Document ID: {validation.document_id}."
+                    f"{compared_document_text} "
+                    f"Extracted value: "
+                    f"{validation.extracted_value}. "
+                    f"Expected value: "
+                    f"{validation.expected_value}."
                 ),
                 validation_id=validation.validation_id
             )
 
         # --------------------------------------------------
-        # 12. EXCEPTION EVIDENCE
+        # 17. EXCEPTION EVIDENCE
         # --------------------------------------------------
 
         save_evidence(
@@ -434,27 +799,29 @@ def investigate_exception(
                 f"Exception {exception.exception_id}: "
                 f"{exception.exception_type}. "
                 f"Description: {exception.description}. "
-                f"Severity: {exception.severity}."
+                f"Severity: {exception.severity}. "
+                f"Current status: {exception.status}."
             ),
             exception_id=exception.exception_id
         )
 
         # --------------------------------------------------
-        # 13. POSSIBLE CAUSE EVIDENCE
+        # 18. INVESTIGATION FINDING EVIDENCE
         # --------------------------------------------------
 
         save_evidence(
             evidence_class="POSSIBLE_EXPLANATION",
             statement=(
-                f"Potential cause: {possible_cause}. "
-                f"This is an investigation finding and "
-                f"may require human verification."
+                f"Investigation finding: {possible_cause}. "
+                f"{summary} "
+                f"This finding is based on the available "
+                f"records and may require human verification."
             ),
             exception_id=exception.exception_id
         )
 
         # --------------------------------------------------
-        # 14. UPDATE EXCEPTION STATUS
+        # 19. UPDATE EXCEPTION STATUS
         # --------------------------------------------------
 
         if exception.status == "OPEN":
@@ -462,7 +829,7 @@ def investigate_exception(
             exception.status = "INVESTIGATING"
 
         # --------------------------------------------------
-        # 15. COMMIT
+        # 20. COMMIT
         # --------------------------------------------------
 
         if commit:
@@ -476,7 +843,7 @@ def investigate_exception(
             db.flush()
 
         # --------------------------------------------------
-        # 16. RETURN RESULTS
+        # 21. RETURN RESULTS
         # --------------------------------------------------
 
         return {
@@ -491,6 +858,19 @@ def investigate_exception(
             "possible_cause": investigation.possible_cause,
             "affected_process": investigation.affected_process,
             "recommended_next": investigation.recommended_next,
+            "document_analysis": {
+                "total_document_versions": len(documents),
+                "current_document_versions": len(current_documents),
+                "historical_document_versions": len(historical_documents),
+                "current_validation_records": len(current_validations),
+                "historical_validation_records": len(historical_validations),
+                "current_mismatches": len(current_mismatches),
+                "historical_mismatches": len(historical_mismatches),
+                "historical_mismatch_records": len(historical_mismatches),
+                "historical_mismatch_fields": historical_mismatch_fields,
+                "historical_discrepancy_count": historical_discrepancy_count,
+                "current_documents_valid": current_documents_valid
+            },
             "evidence_count": evidence_count
         }
 
