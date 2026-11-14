@@ -63,7 +63,8 @@ def transition_exception_status(
     exception_id: int,
     new_status: str,
     operator_id: int = None,
-    commit: bool = True
+    commit: bool = True,
+    resolution_notes: str = None
 ):
     """
     Change an exception status and append an immutable history row.
@@ -122,6 +123,8 @@ def transition_exception_status(
 
     if new_status == "RESOLVED":
         exception.resolved_at = changed_at
+        if resolution_notes is not None:
+            exception.resolution_notes = resolution_notes.strip()
 
     db.add(ExceptionStatusHistory(
         exception_id=exception_id,
@@ -270,7 +273,8 @@ def resolve_exception(
             exception_id=exception_id,
             new_status="RESOLVED",
             operator_id=operator_id,
-            commit=commit
+            commit=commit,
+            resolution_notes=resolution_notes.strip()
         )
         result["message"] = "Exception resolved successfully."
         return result
