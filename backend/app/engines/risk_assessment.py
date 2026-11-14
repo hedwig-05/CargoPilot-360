@@ -2,11 +2,13 @@
 from datetime import datetime
 from decimal import Decimal
 
-from sqlalchemy.orm import Session
+from sqlalchemy import and_, func, or_
+from sqlalchemy.orm import Session, aliased
 
 from app.models import (
     Shipment,
     ShipmentEvent,
+    Document,
     DocumentValidation,
     Exception as ShipmentException,
     RiskAssessment,
@@ -357,12 +359,72 @@ def detect_risk_factors(db: Session, shipment_id: int):
     # 2. DOCUMENT VALIDATION EVIDENCE
     # --------------------------------------------------
 
+    # First identify the highest version number for each document type
+    # belonging to this shipment. Validation timestamps are deliberately
+    # not used: revalidating an archived document must not make it current.
+    latest_versions = (
+        db.query(
+            Document.document_type.label("document_type"),
+            func.max(Document.version_no).label("latest_version_no")
+        )
+        .filter(Document.shipment_id == shipment_id)
+        .group_by(Document.document_type)
+        .subquery()
+    )
+
+    # Resolve those version numbers back to their document IDs. This keeps
+    # versioning independent for invoices, bills of lading, packing lists,
+    # and other document types.
+    latest_documents = (
+        db.query(Document.document_id.label("document_id"))
+        .join(
+            latest_versions,
+            and_(
+                Document.document_type == latest_versions.c.document_type,
+                Document.version_no == latest_versions.c.latest_version_no
+            )
+        )
+        .filter(Document.shipment_id == shipment_id)
+        .subquery()
+    )
+
+    # For cross-document validations, the compared document must also be
+    # the latest version of its own document type. A direct comparison
+    # against an archived document is historical evidence, not current risk.
+    ComparedDocument = aliased(Document)
+
+    compared_document_is_current = (
+        db.query(ComparedDocument.document_id)
+        .join(
+            latest_versions,
+            and_(
+                ComparedDocument.document_type == latest_versions.c.document_type,
+                ComparedDocument.version_no == latest_versions.c.latest_version_no
+            )
+        )
+        .filter(
+            ComparedDocument.document_id
+            == DocumentValidation.compared_document_id,
+            ComparedDocument.shipment_id == shipment_id
+        )
+        .exists()
+    )
+
     validations = (
         db.query(DocumentValidation)
+        .join(
+            latest_documents,
+            latest_documents.c.document_id
+            == DocumentValidation.document_id
+        )
         .filter(
             DocumentValidation.shipment_id == shipment_id,
             DocumentValidation.validation_result.in_(
                 ["MISMATCH", "MISSING", "UNCERTAIN"]
+            ),
+            or_(
+                DocumentValidation.compared_document_id.is_(None),
+                compared_document_is_current
             )
         )
         .all()
