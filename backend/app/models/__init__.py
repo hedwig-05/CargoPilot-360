@@ -5,6 +5,7 @@ from app.models.shipment_event import ShipmentEvent
 from app.models.document import Document
 from app.models.document_validation import DocumentValidation
 from app.models.exception import Exception
+from app.models.exception_status_history import ExceptionStatusHistory
 from app.models.agent_workflow import AgentWorkflow
 from app.models.agent_run import AgentRun
 from app.models.investigation import Investigation
