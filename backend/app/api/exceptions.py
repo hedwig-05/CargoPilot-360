@@ -1,6 +1,4 @@
 from datetime import datetime
-from decimal import Decimal
-
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
@@ -212,13 +210,9 @@ def update_exception_status(
             exception_id=exception_id,
             new_status=data.status,
             operator_id=current_user.user_id,
-            commit=True
+            commit=True,
+            resolution_notes=data.resolution_notes if data.status == "RESOLVED" else None
         )
-        if data.status == "RESOLVED":
-            exception = db.query(Exception).filter(Exception.exception_id == exception_id).first()
-            exception.resolution_notes = data.resolution_notes.strip()
-            db.commit()
-            result["resolution_notes"] = exception.resolution_notes
         return result
     except ValueError as error:
         db.rollback()
