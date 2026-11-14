@@ -18,6 +18,12 @@ class AgentWorkflow(Base):
 
     workflow_id = Column(Integer, primary_key=True, autoincrement=True)
 
+    parent_workflow_id = Column(
+        Integer,
+        ForeignKey("agent_workflows.workflow_id"),
+        nullable=True
+    )
+
     workflow_public_id = Column(String(40), nullable=False, unique=True)
 
     thread_id = Column(String(80), nullable=False)

@@ -1,6 +1,7 @@
 
 import uuid
 import time
+import logging
 
 from datetime import datetime, date
 from decimal import Decimal
@@ -25,6 +26,13 @@ from app.engines.risk_assessment import assess_shipment_risk
 from app.engines.resolution_planner import create_resolution_plan
 from app.engines.action_executor import execute_action
 from app.engines.resolution_verification import verify_exception_resolution
+
+
+# ======================================================
+# LOGGER
+# ======================================================
+
+logger = logging.getLogger(__name__)
 
 
 # ======================================================
@@ -152,7 +160,7 @@ def link_action_to_supervisor(
     Store the Supervisor references in the action payload.
 
     This allows continue_supervisor() to update the
-    correct parent Supervisor workflow after approval.
+    correct Supervisor workflow after approval.
     """
 
     payload = dict(action.action_payload or {})
@@ -604,6 +612,21 @@ def run_supervisor(
 
                 # Reuse the workflow associated with the plan.
                 existing_child_workflow_id = existing_plan.workflow_id
+
+                # Link the new Supervisor workflow to the
+                # workflow that owns the existing resolution plan.
+                if existing_plan.workflow_id != workflow_id:
+
+                    workflow.parent_workflow_id = (
+                        existing_plan.workflow_id
+                    )
+
+                    logger.info(
+                        "Workflow dependency created: "
+                        "workflow %s depends on workflow %s",
+                        workflow_id,
+                        existing_plan.workflow_id
+                    )
 
                 if existing_action:
 

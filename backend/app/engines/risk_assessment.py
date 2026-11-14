@@ -192,17 +192,50 @@ def detect_risk_factors(db: Session, shipment_id: int):
 
         elif item.exception_type == "SHIPMENT_DELAY":
 
-            evidence["ARRIVAL_DELAY"].append({
-                "detail": description,
-                "severity": item.severity,
-                "issue_key": (
-                    f"event:{item.event_id}"
-                    if item.event_id
-                    else f"exception:{item.exception_id}"
-                ),
-                "exception_id": item.exception_id,
-                "event_id": item.event_id
-            })
+            # Identify the event responsible for the delay.
+
+            delayed_event = None
+
+            if item.event_id:
+
+                delayed_event = (
+                    db.query(ShipmentEvent)
+                    .filter(
+                        ShipmentEvent.event_id == item.event_id
+                    )
+                    .first()
+                )
+
+            # Customs clearance delay
+
+            if (
+                delayed_event
+                and delayed_event.event_type == "CUSTOMS_CLEARED"
+            ):
+
+                evidence["CUSTOMS_ISSUE"].append({
+                    "detail": description,
+                    "severity": item.severity,
+                    "issue_key": f"event:{item.event_id}",
+                    "exception_id": item.exception_id,
+                    "event_id": item.event_id
+                })
+
+            # Other shipment delays
+
+            else:
+
+                evidence["ARRIVAL_DELAY"].append({
+                    "detail": description,
+                    "severity": item.severity,
+                    "issue_key": (
+                        f"event:{item.event_id}"
+                        if item.event_id
+                        else f"exception:{item.exception_id}"
+                    ),
+                    "exception_id": item.exception_id,
+                    "event_id": item.event_id
+                })
 
         # MISSING MILESTONE
 

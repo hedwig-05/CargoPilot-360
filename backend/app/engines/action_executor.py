@@ -16,6 +16,10 @@ from app.models import (
     AuditLog
 )
 
+from app.engines.workflow_dependencies import (
+    update_dependent_workflows
+)
+
 
 # ==================================================
 # CONFIGURATION
@@ -85,19 +89,13 @@ def get_action_for_execution(
     )
 
     if not action:
-
         raise LookupError(
             f"Action {action_id} not found."
         )
 
-    # ------------------------------------------
-    # CHECK APPROVAL
-    # ------------------------------------------
-
     if action.requires_approval:
 
         if action.approval_status != "APPROVED":
-
             raise ValueError(
                 "Action must be approved before execution."
             )
@@ -107,10 +105,6 @@ def get_action_for_execution(
         raise ValueError(
             "Action approval configuration is inconsistent."
         )
-
-    # ------------------------------------------
-    # CHECK EXECUTION STATUS
-    # ------------------------------------------
 
     if action.execution_status in [
         "EXECUTING",
@@ -129,10 +123,6 @@ def get_action_for_execution(
             f"Action cannot be executed. "
             f"Current status: {action.execution_status}"
         )
-
-    # ------------------------------------------
-    # CHECK ACTION TYPE
-    # ------------------------------------------
 
     if action.action_type not in SUPPORTED_ACTION_TYPES:
 
@@ -230,10 +220,6 @@ def get_execution_context(
     plan: ResolutionPlan
 ):
 
-    # ------------------------------------------
-    # GET SHIPMENT
-    # ------------------------------------------
-
     shipment = (
         db.query(Shipment)
         .filter(
@@ -248,10 +234,6 @@ def get_execution_context(
         raise LookupError(
             f"Shipment {workflow.shipment_id} not found."
         )
-
-    # ------------------------------------------
-    # GET EXCEPTION
-    # ------------------------------------------
 
     exception = None
 
@@ -295,10 +277,6 @@ def execute_simulated_action(
 
     payload = action.action_payload or {}
 
-    # ------------------------------------------
-    # REQUEST DOCUMENT CORRECTION
-    # ------------------------------------------
-
     if action_type == "REQUEST_DOCUMENT_CORRECTION":
 
         return {
@@ -309,10 +287,6 @@ def execute_simulated_action(
             "simulation": True
         }
 
-    # ------------------------------------------
-    # REQUEST MISSING DOCUMENT
-    # ------------------------------------------
-
     if action_type == "REQUEST_MISSING_DOCUMENT":
 
         return {
@@ -322,10 +296,6 @@ def execute_simulated_action(
             "message": ACTION_MESSAGES[action_type],
             "simulation": True
         }
-
-    # ------------------------------------------
-    # SEND FOLLOW-UP EMAIL
-    # ------------------------------------------
 
     if action_type == "SEND_FOLLOW_UP_EMAIL":
 
@@ -338,10 +308,6 @@ def execute_simulated_action(
             "simulation": True
         }
 
-    # ------------------------------------------
-    # NOTIFY OPERATIONS OFFICER
-    # ------------------------------------------
-
     if action_type == "NOTIFY_OPERATIONS_OFFICER":
 
         return {
@@ -352,10 +318,6 @@ def execute_simulated_action(
             "notification_sent": False,
             "simulation": True
         }
-
-    # ------------------------------------------
-    # ESCALATE TO MANAGER
-    # ------------------------------------------
 
     if action_type == "ESCALATE_TO_MANAGER":
 
@@ -368,10 +330,6 @@ def execute_simulated_action(
             "escalation_sent": False,
             "simulation": True
         }
-
-    # ------------------------------------------
-    # UPDATE SHIPMENT STATUS
-    # ------------------------------------------
 
     if action_type == "UPDATE_SHIPMENT_STATUS":
 
@@ -395,10 +353,6 @@ def execute_simulated_action(
             "message": ACTION_MESSAGES[action_type],
             "simulation": True
         }
-
-    # ------------------------------------------
-    # CREATE NOTIFICATION
-    # ------------------------------------------
 
     if action_type == "CREATE_NOTIFICATION":
 
@@ -437,8 +391,6 @@ def create_action_agent_run(
     action: Action,
     workflow: AgentWorkflow
 ):
-
-    # Get the latest step number for this workflow.
 
     latest_run = (
         db.query(AgentRun)
@@ -497,8 +449,6 @@ def create_action_execution(
     workflow: AgentWorkflow,
     run: AgentRun
 ):
-
-    # Get the latest attempt number for this action.
 
     latest_execution = (
         db.query(ActionExecution)
@@ -603,36 +553,28 @@ def execute_action(
 
     try:
 
-        # ------------------------------------------
         # 1. GET AND VALIDATE ACTION
-        # ------------------------------------------
 
         action = get_action_for_execution(
             db=db,
             action_id=action_id
         )
 
-        # ------------------------------------------
         # 2. GET WORKFLOW
-        # ------------------------------------------
 
         workflow = get_workflow_for_execution(
             db=db,
             action=action
         )
 
-        # ------------------------------------------
         # 3. GET RESOLUTION PLAN
-        # ------------------------------------------
 
         plan = get_plan_for_execution(
             db=db,
             action=action
         )
 
-        # ------------------------------------------
         # 4. GET SHIPMENT AND EXCEPTION
-        # ------------------------------------------
 
         shipment, exception = get_execution_context(
             db=db,
@@ -641,9 +583,7 @@ def execute_action(
             plan=plan
         )
 
-        # ------------------------------------------
         # 5. CREATE ACTION AGENT RUN
-        # ------------------------------------------
 
         run = create_action_agent_run(
             db=db,
@@ -651,9 +591,7 @@ def execute_action(
             workflow=workflow
         )
 
-        # ------------------------------------------
         # 6. CREATE EXECUTION ATTEMPT
-        # ------------------------------------------
 
         execution = create_action_execution(
             db=db,
@@ -662,14 +600,10 @@ def execute_action(
             run=run
         )
 
-        # Save IDs for failure handling.
-
         execution_id = execution.execution_id
         run_id = run.run_id
 
-        # ------------------------------------------
         # 7. UPDATE EXECUTION STATE
-        # ------------------------------------------
 
         action.execution_status = "EXECUTING"
 
@@ -686,17 +620,13 @@ def execute_action(
 
             exception.status = "IN_PROGRESS"
 
-        # Save the STARTED execution records.
-
         db.commit()
 
         db.refresh(action)
         db.refresh(execution)
         db.refresh(run)
 
-        # ------------------------------------------
         # 8. EXECUTE SIMULATED OPERATION
-        # ------------------------------------------
 
         try:
 
@@ -712,9 +642,7 @@ def execute_action(
                 (time.perf_counter() - started_at) * 1000
             )
 
-            # --------------------------------------
             # 9. UPDATE SUCCESSFUL EXECUTION
-            # --------------------------------------
 
             execution.status = "SUCCEEDED"
 
@@ -746,9 +674,7 @@ def execute_action(
 
             run.completed_at = completed_at
 
-            # --------------------------------------
             # 10. CREATE SUCCESS AUDIT LOG
-            # --------------------------------------
 
             create_execution_audit_log(
                 db=db,
@@ -758,6 +684,15 @@ def execute_action(
                 execution=execution,
                 result=result,
                 audit_action="ACTION_EXECUTED"
+            )
+
+            # 11. UPDATE DEPENDENT WORKFLOWS
+
+            dependent_count = update_dependent_workflows(
+                db=db,
+                parent_workflow_id=workflow.workflow_id,
+                outcome="SUCCEEDED",
+                current_time=completed_at
             )
 
             db.commit()
@@ -773,18 +708,13 @@ def execute_action(
                 "execution_status": action.execution_status,
                 "plan_status": plan.status,
                 "workflow_status": workflow.status,
+                "dependent_workflows_updated": dependent_count,
                 "result": result
             }
 
         except Exception as error:
 
-            # --------------------------------------
-            # 11. RECORD EXECUTION FAILURE
-            # --------------------------------------
-
-            # IDs were saved before the transaction
-            # rollback because SQLAlchemy may expire
-            # objects after rollback.
+            # 12. RECORD EXECUTION FAILURE
 
             db.rollback()
 
@@ -897,6 +827,16 @@ def execute_action(
                 audit_action="ACTION_EXECUTION_FAILED"
             )
 
+            # 13. UPDATE DEPENDENT WORKFLOWS
+
+            dependent_count = update_dependent_workflows(
+                db=db,
+                parent_workflow_id=workflow.workflow_id,
+                outcome="FAILED",
+                current_time=completed_at,
+                error_message=error_message
+            )
+
             db.commit()
 
             return {
@@ -907,6 +847,7 @@ def execute_action(
                 "run_id": run.run_id,
                 "attempt_no": execution.attempt_no,
                 "execution_status": action.execution_status,
+                "dependent_workflows_updated": dependent_count,
                 "error": error_message
             }
 

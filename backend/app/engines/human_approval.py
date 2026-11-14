@@ -10,7 +10,9 @@ from app.models import (
     AuditLog,
     User
 )
-
+from app.engines.workflow_dependencies import (
+    update_dependent_workflows
+)
 
 # ==================================================
 # APPROVAL CONFIGURATION
@@ -191,6 +193,15 @@ def approve_action(
         workflow.current_node = "ACTION_EXECUTION"
         workflow.completed_at = None
 
+        # Notify workflows that depend on this action.
+        dependent_count = update_dependent_workflows(
+            db=db,
+            parent_workflow_id=workflow.workflow_id,
+            outcome="APPROVED",
+            current_time=current_time
+        )
+
+
         # Create audit record
         create_approval_audit_log(
             db=db,
@@ -271,6 +282,13 @@ def reject_action(
         workflow.current_node = "REJECTED"
         workflow.completed_at = current_time
 
+                # Notify dependent workflows about rejection.
+        dependent_count = update_dependent_workflows(
+            db=db,
+            parent_workflow_id=workflow.workflow_id,
+            outcome="REJECTED",
+            current_time=current_time
+        )
         # Create audit record
         create_approval_audit_log(
             db=db,

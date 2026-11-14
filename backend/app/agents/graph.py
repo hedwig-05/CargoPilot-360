@@ -1,4 +1,3 @@
-
 import uuid
 from datetime import datetime
 
@@ -14,7 +13,9 @@ from app.models import (
     Shipment,
     Exception as ShipmentException,
     AgentWorkflow,
-    AgentRun
+    AgentRun,
+    ResolutionPlan,
+    Action
 )
 
 from app.engines.exception_detection import (
@@ -485,12 +486,15 @@ def llm_analysis_node(state: CargoPilotState):
 
     print("\n========== LLM ANALYSIS NODE STARTED ==========")
 
+    db = SessionLocal()
+
     analysis_results = []
+    router = None
 
     try:
 
-        # Create the configured Gemini/Ollama router.
-        router = create_llm_router()
+        workflow_id = state["workflow_id"]
+        supervisor_run_id = state["supervisor_run_id"]
 
         investigation_results = state.get(
             "investigation_results", []
@@ -500,11 +504,27 @@ def llm_analysis_node(state: CargoPilotState):
             "exception_details", []
         )
 
+        # Update the workflow's current node.
+
+        workflow = (
+            db.query(AgentWorkflow)
+            .filter(
+                AgentWorkflow.workflow_id == workflow_id
+            )
+            .first()
+        )
+
+        if workflow:
+            workflow.current_node = "llm_analysis"
+
+        db.commit()
+
         for investigation in investigation_results:
 
             exception_id = investigation["exception_id"]
 
-            # Find the corresponding exception information.
+            # Find corresponding exception information.
+
             exception_data = next(
                 (
                     item for item in exception_details
@@ -513,8 +533,8 @@ def llm_analysis_node(state: CargoPilotState):
                 {}
             )
 
-            # Only provide evidence already collected
-            # by our deterministic investigation engine.
+            # Prepare verified investigation findings.
+
             evidence = {
                 "exception": exception_data,
                 "investigation_findings": {
@@ -569,25 +589,128 @@ IMPORTANT RULES:
                 f"{exception_id}..."
             )
 
+            # ------------------------------------------
+            # 1. CREATE DEDICATED LLM AGENT RUN
+            # ------------------------------------------
+
+            llm_run = create_child_run(
+                db=db,
+                workflow_id=workflow_id,
+                parent_run_id=supervisor_run_id,
+                agent_type="LLM",
+                node_name="llm_analysis",
+                input_data={
+                    "exception_id": exception_id,
+                    "shipment_id": exception_data.get(
+                        "shipment_id"
+                    ),
+                    "prompt_version": "investigation-analysis-v1",
+                    "investigation_findings": evidence
+                }
+            )
+
+            db.commit()
+            db.refresh(llm_run)
+
+            llm_run_id = llm_run.run_id
+
+            # ------------------------------------------
+            # 2. CALL LLM ROUTER AND RECORD METADATA
+            # ------------------------------------------
+
             try:
 
-                llm_response = router.generate(prompt)
+                if router is None:
+                    router = create_llm_router()
+
+                result = router.generate_with_metadata(prompt)
+
+                # --------------------------------------
+                # 3. SAVE SUCCESSFUL LLM EXECUTION
+                # --------------------------------------
+
+                llm_run.provider_name = result["provider_name"]
+
+                llm_run.model_name = result["model_name"]
+
+                llm_run.latency_ms = result["latency_ms"]
+
+                llm_run.prompt_version = (
+                    "investigation-analysis-v1"
+                )
+
+                llm_run.execution_status = "COMPLETED"
+
+                llm_run.output_data = {
+                    "analysis": result["content"],
+                    "provider_name": result["provider_name"],
+                    "model_name": result["model_name"],
+                    "latency_ms": result["latency_ms"],
+                    "fallback_used": result["fallback_used"]
+                }
+
+                llm_run.completed_at = datetime.now()
+
+                db.commit()
+
+                # --------------------------------------
+                # 4. ADD RESULT TO LANGGRAPH STATE
+                # --------------------------------------
 
                 analysis_results.append({
                     "exception_id": exception_id,
+                    "llm_run_id": llm_run_id,
                     "provider_status": "SUCCESS",
-                    "analysis": llm_response
+                    "provider_name": result["provider_name"],
+                    "model_name": result["model_name"],
+                    "latency_ms": result["latency_ms"],
+                    "fallback_used": result["fallback_used"],
+                    "analysis": result["content"]
                 })
+
+                print(
+                    f"LLM run {llm_run_id} completed "
+                    f"using {result['provider_name']}."
+                )
 
             except Exception as error:
 
                 print(
-                    f"LLM analysis failed for exception "
+                    f"LLM execution failed for exception "
                     f"{exception_id}: {error}"
                 )
 
+                # --------------------------------------
+                # 5. RECORD FAILED LLM EXECUTION
+                # --------------------------------------
+
+                db.rollback()
+
+                failed_run = (
+                    db.query(AgentRun)
+                    .filter(
+                        AgentRun.run_id == llm_run_id
+                    )
+                    .first()
+                )
+
+                if failed_run:
+
+                    failed_run.execution_status = "FAILED"
+
+                    failed_run.error_message = str(error)
+
+                    failed_run.output_data = {
+                        "error": str(error)
+                    }
+
+                    failed_run.completed_at = datetime.now()
+
+                    db.commit()
+
                 analysis_results.append({
                     "exception_id": exception_id,
+                    "llm_run_id": llm_run_id,
                     "provider_status": "FAILED",
                     "analysis": None,
                     "error": str(error)
@@ -602,19 +725,18 @@ IMPORTANT RULES:
 
     except Exception as error:
 
+        db.rollback()
+
         print("\nLLM analysis node failed:", str(error))
 
-        # LLM failure must not prevent the existing
-        # deterministic risk and decision engines
-        # from continuing.
         return {
             "current_stage": "LLM_ANALYSIS",
-            "llm_analysis_results": [{
-                "provider_status": "FAILED",
-                "analysis": None,
-                "error": str(error)
-            }]
+            "llm_analysis_results": analysis_results,
+            "errors": state.get("errors", []) + [str(error)]
         }
+
+    finally:
+        db.close()
 
 
 # ==========================================================
@@ -626,7 +748,6 @@ def risk_assessment_node(state: CargoPilotState):
     print("\n========== RISK ASSESSMENT NODE STARTED ==========")
 
     db = SessionLocal()
-
     risk_results = []
 
     try:
@@ -634,6 +755,13 @@ def risk_assessment_node(state: CargoPilotState):
         workflow_id = state["workflow_id"]
         supervisor_run_id = state["supervisor_run_id"]
         shipment_id = state["shipment_id"]
+
+        # Collect all relevant exception IDs for traceability.
+
+        exception_ids = [
+            item["exception_id"]
+            for item in state["exception_details"]
+        ]
 
         workflow = (
             db.query(AgentWorkflow)
@@ -648,80 +776,77 @@ def risk_assessment_node(state: CargoPilotState):
 
         db.commit()
 
-        for exception_data in state["exception_details"]:
+        print(
+            f"\nAssessing shipment ID: {shipment_id}"
+        )
 
-            exception_id = exception_data["exception_id"]
+        print(
+            f"Related exception IDs: {exception_ids}"
+        )
 
-            print(
-                f"\nAssessing risk for exception ID: {exception_id}"
+        # Create ONE risk assessment agent run
+        # because risk assessment is shipment-level.
+
+        risk_run = create_child_run(
+            db=db,
+            workflow_id=workflow_id,
+            parent_run_id=supervisor_run_id,
+            agent_type="RISK_ASSESSMENT",
+            node_name="risk_assessment",
+            input_data={
+                "shipment_id": shipment_id,
+                "exception_ids": exception_ids
+            }
+        )
+
+        db.commit()
+        db.refresh(risk_run)
+
+        try:
+
+            result = assess_shipment_risk(
+                db=db,
+                shipment_id=shipment_id,
+                exception_id=None,
+                workflow_id=workflow_id,
+                run_id=risk_run.run_id
             )
 
-            # Create a dedicated Risk Assessment Agent run.
+            run_output = {
+                "risk_id": result["risk_id"],
+                "shipment_id": shipment_id,
+                "related_exception_ids": exception_ids,
+                "risk_score": float(result["risk_score"]),
+                "risk_level": result["risk_level"],
+                "ruleset_version": result["ruleset_version"],
+                "explanation": result["explanation"]
+            }
 
-            risk_run = create_child_run(
-                db=db,
-                workflow_id=workflow_id,
-                parent_run_id=supervisor_run_id,
-                agent_type="RISK_ASSESSMENT",
-                node_name="risk_assessment",
-                input_data={
-                    "shipment_id": shipment_id,
-                    "exception_id": exception_id
-                }
+            update_agent_run(
+                db,
+                risk_run.run_id,
+                "COMPLETED",
+                output_data=run_output
             )
 
             db.commit()
-            db.refresh(risk_run)
 
-            try:
+            risk_results.append(run_output)
 
-                # Existing deterministic risk engine.
+        except Exception as error:
 
-                result = assess_shipment_risk(
-                    db=db,
-                    shipment_id=shipment_id,
-                    exception_id=exception_id,
-                    workflow_id=workflow_id,
-                    run_id=risk_run.run_id
-                )
+            db.rollback()
 
-                # Save concise JSON-compatible run output.
+            update_agent_run(
+                db,
+                risk_run.run_id,
+                "FAILED",
+                error_message=str(error)
+            )
 
-                run_output = {
-                    "risk_id": result["risk_id"],
-                    "shipment_id": shipment_id,
-                    "exception_id": exception_id,
-                    "risk_score": float(result["risk_score"]),
-                    "risk_level": result["risk_level"],
-                    "ruleset_version": result["ruleset_version"],
-                    "explanation": result["explanation"]
-                }
+            db.commit()
 
-                update_agent_run(
-                    db,
-                    risk_run.run_id,
-                    "COMPLETED",
-                    output_data=run_output
-                )
-
-                db.commit()
-
-                risk_results.append(run_output)
-
-            except Exception as error:
-
-                db.rollback()
-
-                update_agent_run(
-                    db,
-                    risk_run.run_id,
-                    "FAILED",
-                    error_message=str(error)
-                )
-
-                db.commit()
-
-                raise
+            raise
 
         return {
             "current_stage": "RISK_ASSESSMENT",
@@ -760,6 +885,7 @@ def decision_node(state: CargoPilotState):
     try:
 
         workflow_id = state["workflow_id"]
+        supervisor_run_id = state["supervisor_run_id"]
 
         workflow = (
             db.query(AgentWorkflow)
@@ -783,12 +909,137 @@ def decision_node(state: CargoPilotState):
                 f"{exception_id}"
             )
 
-            result = create_resolution_plan(
-                db=db,
-                exception_id=exception_id
+            # ------------------------------------------
+            # 1. CHECK FOR AN EXISTING ACTIVE PLAN
+            # ------------------------------------------
+
+            existing_plan = (
+                db.query(ResolutionPlan)
+                .filter(
+                    ResolutionPlan.exception_id == exception_id,
+                    ResolutionPlan.status.in_([
+                        "DRAFT",
+                        "PENDING_APPROVAL",
+                        "APPROVED",
+                        "EXECUTING"
+                    ])
+                )
+                .order_by(
+                    ResolutionPlan.plan_id.desc()
+                )
+                .first()
             )
 
-            resolution_results.append(result)
+            # ------------------------------------------
+            # 2. REUSE EXISTING PLAN IF AVAILABLE
+            # ------------------------------------------
+
+            if existing_plan:
+
+                print(
+                    f"Reusing existing resolution plan: "
+                    f"{existing_plan.plan_id}"
+                )
+
+                # Link this workflow to the workflow
+                # that owns the existing resolution plan.
+                # Prevent a workflow from becoming its own parent.
+
+                if existing_plan.workflow_id != workflow_id:
+
+                    workflow.parent_workflow_id = (
+                        existing_plan.workflow_id
+                    )
+
+                    print(
+                        f"DEPENDENCY LINK: Workflow {workflow_id} "
+                        f"depends on workflow {existing_plan.workflow_id}"
+                    )
+
+                else:
+
+                    print(
+                        "Existing plan belongs to this workflow. "
+                        "No parent dependency required."
+                    )
+
+                existing_action = (
+                    db.query(Action)
+                    .filter(
+                        Action.plan_id == existing_plan.plan_id
+                    )
+                    .order_by(
+                        Action.action_id.desc()
+                    )
+                    .first()
+                )
+
+                if not existing_action:
+                    raise ValueError(
+                        f"Active plan {existing_plan.plan_id} "
+                        "has no associated action."
+                    )
+
+                # Record this reuse decision as an AgentRun.
+
+                decision_run = create_child_run(
+                    db=db,
+                    workflow_id=workflow_id,
+                    parent_run_id=supervisor_run_id,
+                    agent_type="DECISION",
+                    node_name="resolution_planner_reuse",
+                    input_data={
+                        "exception_id": exception_id,
+                        "existing_plan_id": existing_plan.plan_id,
+                        "existing_action_id": existing_action.action_id
+                    }
+                )
+
+                db.commit()
+
+                update_agent_run(
+                    db,
+                    decision_run.run_id,
+                    "COMPLETED",
+                    output_data={
+                        "decision": "REUSE_EXISTING_PLAN",
+                        "plan_id": existing_plan.plan_id,
+                        "action_id": existing_action.action_id
+                    }
+                )
+
+                db.commit()
+
+                resolution_results.append({
+                    "message": "Existing resolution plan reused.",
+                    "exception_id": exception_id,
+                    "workflow_id": existing_plan.workflow_id,
+                    "run_id": decision_run.run_id,
+                    "plan_id": existing_plan.plan_id,
+                    "action_id": existing_action.action_id,
+                    "version_no": existing_plan.version_no,
+                    "priority": existing_plan.priority,
+                    "plan_status": existing_plan.status,
+                    "action_type": existing_action.action_type,
+                    "approval_status": existing_action.approval_status,
+                    "execution_status": existing_action.execution_status,
+                    "reused_existing": True
+                })
+
+            # ------------------------------------------
+            # 3. CREATE A NEW PLAN IF NONE EXISTS
+            # ------------------------------------------
+
+            else:
+
+                result = create_resolution_plan(
+                    db=db,
+                    exception_id=exception_id
+                )
+
+                result["reused_existing"] = False
+
+                resolution_results.append(result)
 
         return {
             "current_stage": "DECISION",
