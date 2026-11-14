@@ -70,6 +70,22 @@ RESOLUTION_RULES = {
         "description": (
             "Escalate the container discharge issue to management."
         )
+    },
+
+    "DAMAGE_SHORTAGE": {
+        "action_type": "ESCALATE_TO_MANAGER",
+        "description": (
+            "Escalate the reported cargo damage or shortage for "
+            "inspection, quantity reconciliation and claims review."
+        )
+    },
+
+    "ROLLED_CARGO": {
+        "action_type": "NOTIFY_OPERATIONS_OFFICER",
+        "description": (
+            "Notify operations to confirm the carrier's roll-over reason "
+            "and arrange the next available sailing."
+        )
     }
 }
 
