@@ -54,7 +54,9 @@ def _risk_factor_for_exception(exception, db):
             event = db.query(ShipmentEvent).filter(
                 ShipmentEvent.event_id == exception.event_id
             ).first()
-        return "CUSTOMS_ISSUE" if event and event.event_type == "CUSTOMS_CLEARED" else "ARRIVAL_DELAY"
+        customs_delay = event and event.event_type == "CUSTOMS_CLEARED"
+        customs_delay = customs_delay or "CUSTOMS_CLEARED" in (exception.description or "")
+        return "CUSTOMS_ISSUE" if customs_delay else "ARRIVAL_DELAY"
     return None
 
 
@@ -103,19 +105,27 @@ def _sla_metrics(exception, db):
 
     factor = _risk_factor_for_exception(exception, db)
     target_hours = RESPONSE_SLA_HOURS.get(factor)
-    response_elapsed_minutes = (
-        tta_net_minutes if tta_net_minutes is not None
-        else round(max(0, (now - exception.detected_at).total_seconds() - min(
-            paused_seconds,
-            max(0, (now - exception.detected_at).total_seconds())
-        )) / 60, 2)
-    )
+    if tta_net_minutes is not None:
+        response_elapsed_minutes = tta_net_minutes
+    elif exception.status == "OPEN" or currently_paused:
+        elapsed_seconds = max(0, (now - exception.detected_at).total_seconds())
+        response_elapsed_minutes = round(
+            max(0, elapsed_seconds - min(paused_seconds, elapsed_seconds)) / 60,
+            2
+        )
+    else:
+        # This exception was already beyond OPEN before acknowledgement
+        # timestamps were introduced. Do not invent a historical TTA.
+        response_elapsed_minutes = None
+
     if target_hours is None:
         sla_status = "UNMAPPED"
     elif exception.acknowledged_at is not None:
         sla_status = "MET" if response_elapsed_minutes <= target_hours * 60 else "BREACHED"
     elif currently_paused:
         sla_status = "PAUSED"
+    elif exception.status != "OPEN":
+        sla_status = "ACKNOWLEDGEMENT_NOT_RECORDED"
     else:
         sla_status = "BREACHED" if response_elapsed_minutes > target_hours * 60 else "WITHIN_SLA"
 
@@ -201,8 +211,11 @@ def update_exception_status(
     if data.status not in ALL_EXCEPTION_STATUSES:
         raise HTTPException(status_code=400, detail="Unsupported exception status.")
 
-    if data.status == "RESOLVED" and not (data.resolution_notes or "").strip():
-        raise HTTPException(status_code=400, detail="Resolution notes are required to resolve an exception.")
+    if data.status == "RESOLVED":
+        raise HTTPException(
+            status_code=400,
+            detail="Use the resolution verification workflow to resolve an exception."
+        )
 
     try:
         result = transition_exception_status(
@@ -210,8 +223,7 @@ def update_exception_status(
             exception_id=exception_id,
             new_status=data.status,
             operator_id=current_user.user_id,
-            commit=True,
-            resolution_notes=data.resolution_notes if data.status == "RESOLVED" else None
+            commit=True
         )
         return result
     except ValueError as error:
