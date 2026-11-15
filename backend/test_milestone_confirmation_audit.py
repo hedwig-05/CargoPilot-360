@@ -9,16 +9,20 @@ from fastapi.testclient import TestClient
 from app.api.shipment_events import router as shipment_events_router
 from app.auth.dependencies import get_current_user
 from app.database.connection import get_db
+from app.models import Shipment, ShipmentEvent
 
 
 class FakeQuery:
-    def __init__(self, record):
+    def __init__(self, record, db, model):
         self.record = record
+        self.db = db
+        self.model = model
 
     def filter(self, *args, **kwargs):
         return self
 
     def with_for_update(self):
+        self.db.locked_models.append(self.model)
         return self
 
     def first(self):
@@ -28,13 +32,19 @@ class FakeQuery:
 class FakeDB:
     def __init__(self, event):
         self.event = event
+        self.shipment = SimpleNamespace(shipment_id=event.shipment_id)
         self.audit_records = []
         self.commit_count = 0
         self.rollback_count = 0
         self.refresh_count = 0
+        self.locked_models = []
 
     def query(self, model):
-        return FakeQuery(self.event)
+        record = {
+            Shipment: self.shipment,
+            ShipmentEvent: self.event,
+        }.get(model)
+        return FakeQuery(record, self, model)
 
     def add(self, record):
         self.audit_records.append(record)
@@ -100,6 +110,7 @@ class MilestoneConfirmationAuditTests(unittest.TestCase):
         )
 
         self.assertEqual(response.status_code, 200)
+        self.assertEqual(self.db.locked_models, [Shipment, ShipmentEvent])
         self.assertEqual(
             self.event.actual_time,
             datetime(2026, 11, 12, 15, 30),
@@ -119,6 +130,7 @@ class MilestoneConfirmationAuditTests(unittest.TestCase):
         first_response = self.confirm()
 
         self.assertEqual(first_response.status_code, 200)
+        self.assertEqual(self.db.locked_models[:2], [Shipment, ShipmentEvent])
         self.assertEqual(first_response.json()["event_status"], "COMPLETED")
         self.assertEqual(self.event.event_status, "COMPLETED")
         self.assertEqual(self.event.source, "SYSTEM")
