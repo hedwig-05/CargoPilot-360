@@ -1072,13 +1072,19 @@ def run_supervisor(
             workflow.completed_at = completed_at
             supervisor_run.execution_status = "COMPLETED"
 
-        supervisor_run.output_data = make_json_safe(results)
+        supervisor_output = dict(supervisor_run.output_data or {})
+        supervisor_output.update(make_json_safe(results))
+        supervisor_run.output_data = supervisor_output
 
         supervisor_run.latency_ms = int(
             (time.perf_counter() - started_at) * 1000
         )
 
-        supervisor_run.completed_at = completed_at
+        supervisor_run.completed_at = (
+            workflow.completed_at
+            if workflow.status in ["COMPLETED", "FAILED", "CANCELLED"]
+            else None
+        )
 
         db.commit()
 
