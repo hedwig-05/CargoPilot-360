@@ -113,6 +113,28 @@ class MilestoneReconciliationTests(unittest.TestCase):
         self.assertEqual(result["event_status"], "INCONSISTENT")
         self.assertEqual(result["validation_count"], 16)
 
+    def test_latest_document_version_is_selected(self):
+        older_invoice = make_document(
+            10,
+            "COMMERCIAL_INVOICE",
+            self.uploaded_at - timedelta(days=1)
+        )
+        older_invoice.version_no = 1
+
+        # The fake query deliberately does not implement order_by().
+        # The engine must still select the newest version deterministically.
+        self.documents.append(older_invoice)
+
+        result = assess_milestone_reconciliation(
+            self.make_db(), self.event
+        )
+
+        self.assertTrue(result["ready_for_confirmation"])
+        self.assertEqual(
+            result["latest_document_ids"]["invoice"],
+            11
+        )
+
     def test_document_matching_does_not_change_event_status(self):
         original_status = self.event.event_status
         assess_milestone_reconciliation(self.make_db(), self.event)
