@@ -7,16 +7,20 @@ from fastapi.testclient import TestClient
 from app.api.shipment_events import router as shipment_events_router
 from app.auth.dependencies import get_current_user
 from app.database.connection import get_db
+from app.models import Shipment, ShipmentEvent
 
 
 class FakeQuery:
-    def __init__(self, record):
+    def __init__(self, record, db, model):
         self.record = record
+        self.db = db
+        self.model = model
 
     def filter(self, *args, **kwargs):
         return self
 
     def with_for_update(self):
+        self.db.locked_models.append(self.model)
         return self
 
     def first(self):
@@ -26,11 +30,19 @@ class FakeQuery:
 class FakeDB:
     def __init__(self, event):
         self.event = event
+        self.shipment = SimpleNamespace(shipment_id=event.shipment_id)
         self.query_count = 0
+        self.query_models = []
+        self.locked_models = []
 
     def query(self, model):
         self.query_count += 1
-        return FakeQuery(self.event)
+        self.query_models.append(model)
+        record = {
+            Shipment: self.shipment,
+            ShipmentEvent: self.event,
+        }.get(model)
+        return FakeQuery(record, self, model)
 
 
 class MilestoneConfirmationAuthorizationTests(unittest.TestCase):
@@ -90,7 +102,8 @@ class MilestoneConfirmationAuthorizationTests(unittest.TestCase):
         # and reached the route's business logic.
         self.assertEqual(response.status_code, 409)
         self.assertEqual(response.json()["detail"], "This milestone is already completed.")
-        self.assertEqual(self.db.query_count, 1)
+        self.assertEqual(self.db.query_count, 2)
+        self.assertEqual(self.db.locked_models, [Shipment, ShipmentEvent])
 
     def test_admin_passes_role_check(self):
         self.user.role = "ADMIN"
