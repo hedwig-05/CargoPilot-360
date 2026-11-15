@@ -337,6 +337,13 @@ async def upload_document(
         validation_error = None
 
         if document_type in {"COMMERCIAL_INVOICE", "BILL_OF_LADING"}:
+            # Serialize validation per shipment. The initial upload lock was
+            # released by the document-record commit above, so reacquire it
+            # before reading the latest pair and upserting validation rows.
+            db.query(Shipment).filter(
+                Shipment.shipment_id == shipment_id
+            ).with_for_update().first()
+
             required_documents = (
                 db.query(Document)
                 .filter(
