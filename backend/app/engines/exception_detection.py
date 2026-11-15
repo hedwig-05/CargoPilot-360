@@ -42,7 +42,7 @@ def detect_shipment_delays(
 
     # Find overdue shipment events.
     query = db.query(ShipmentEvent).filter(
-        ShipmentEvent.event_status.in_(["PENDING", "LATE"]),
+        ShipmentEvent.event_status.in_(["PENDING", "LATE", "INCONSISTENT"]),
         ShipmentEvent.expected_time < current_time,
         ShipmentEvent.actual_time.is_(None)
     )
@@ -89,7 +89,7 @@ def detect_shipment_delays(
 
             description = (
                 "The following shipment milestones "
-                "are overdue and have not been completed: "
+                "are overdue or require reconciliation and have not been completed: "
                 + "; ".join(milestone_details)
             )
 
