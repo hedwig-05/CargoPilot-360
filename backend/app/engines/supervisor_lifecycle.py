@@ -184,3 +184,36 @@ def refresh_supervisor_workflow_status(
         "failed_exception_workflows": child_statuses.count("FAILED"),
         "exception_workflows": summaries,
     }
+
+
+
+def refresh_supervisors_for_action(
+    db: Session,
+    action_id: int,
+    current_time=None,
+):
+    """Refresh every Supervisor workflow associated with an action."""
+
+    links = (
+        db.query(SupervisorWorkflowLink)
+        .filter(SupervisorWorkflowLink.action_id == action_id)
+        .all()
+    )
+
+    results = []
+    seen_workflow_ids = set()
+
+    for link in links:
+        if link.supervisor_workflow_id in seen_workflow_ids:
+            continue
+
+        seen_workflow_ids.add(link.supervisor_workflow_id)
+        result = refresh_supervisor_workflow_status(
+            db=db,
+            supervisor_workflow_id=link.supervisor_workflow_id,
+            current_time=current_time,
+        )
+        if result:
+            results.append(result)
+
+    return results
