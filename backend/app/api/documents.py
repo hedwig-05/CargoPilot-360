@@ -17,6 +17,7 @@ from app.database.connection import get_db
 from app.models import Document, Shipment
 from app.auth.dependencies import require_roles
 from app.engines.document_processing import process_document
+from app.engines.document_validation import validate_shipment_documents
 
 
 router = APIRouter(
@@ -325,7 +326,44 @@ async def upload_document(
             )
 
         # ------------------------------------------
-        # STEP 11: RETURN RESULT
+        # STEP 11: VALIDATE WHEN BOTH REQUIRED
+        # DOCUMENTS HAVE BEEN EXTRACTED
+        # ------------------------------------------
+
+        validation_result = None
+        validation_error = None
+
+        if document_type in {"COMMERCIAL_INVOICE", "BILL_OF_LADING"}:
+            required_documents = db.query(Document).filter(
+                Document.shipment_id == shipment_id,
+                Document.document_type.in_([
+                    "COMMERCIAL_INVOICE",
+                    "BILL_OF_LADING"
+                ])
+            ).all()
+
+            extracted_types = {
+                item.document_type
+                for item in required_documents
+                if item.extraction_status == "EXTRACTED"
+            }
+
+            if extracted_types == {
+                "COMMERCIAL_INVOICE",
+                "BILL_OF_LADING"
+            }:
+                try:
+                    validation_result = validate_shipment_documents(
+                        db=db,
+                        shipment_id=shipment_id,
+                        commit=True
+                    )
+                except Exception as validation_exception:
+                    db.rollback()
+                    validation_error = str(validation_exception)
+
+        # ------------------------------------------
+        # STEP 12: RETURN RESULT
         # ------------------------------------------
 
         return {
@@ -345,7 +383,9 @@ async def upload_document(
             ],
             "extracted_fields": processing_result[
                 "extracted_fields"
-            ]
+            ],
+            "validation_result": validation_result,
+            "validation_error": validation_error
         }
 
     except HTTPException:
