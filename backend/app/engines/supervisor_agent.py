@@ -1312,8 +1312,6 @@ def continue_supervisor(
 
     db.commit()
 
-    db.commit()
-
     return {
         "success": resolution_verified,
         "message": (
