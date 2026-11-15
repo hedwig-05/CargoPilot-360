@@ -151,7 +151,7 @@ def confirm_shipment_event(
     db.add(AuditLog(
         actor_type="USER",
         actor_user_id=current_user.user_id,
-        actor_name=getattr(current_user, "username", None),
+        actor_name=current_user.name,
         action="SHIPMENT_MILESTONE_CONFIRMED",
         entity_type="SHIPMENT_EVENT",
         entity_id=event.event_id,
