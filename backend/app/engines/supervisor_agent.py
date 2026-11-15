@@ -16,7 +16,8 @@ from app.models import (
     AgentRun,
     Exception as ShipmentException,
     ResolutionPlan,
-    Action
+    Action,
+    SupervisorWorkflowLink
 )
 
 from app.engines.document_processing import process_document
@@ -26,6 +27,10 @@ from app.engines.risk_assessment import assess_shipment_risk
 from app.engines.resolution_planner import create_resolution_plan
 from app.engines.action_executor import execute_action
 from app.engines.resolution_verification import verify_exception_resolution
+from app.engines.supervisor_lifecycle import (
+    register_supervisor_exception_workflow,
+    refresh_supervisor_workflow_status,
+)
 
 
 # ======================================================
@@ -613,6 +618,14 @@ def run_supervisor(
                 # Reuse the workflow associated with the plan.
                 existing_child_workflow_id = existing_plan.workflow_id
 
+                register_supervisor_exception_workflow(
+                    db=db,
+                    supervisor_workflow_id=workflow_id,
+                    exception_workflow_id=existing_child_workflow_id,
+                    exception_id=exception_id,
+                    action_id=(existing_action.action_id if existing_action else None),
+                )
+
                 # Link the new Supervisor workflow to the
                 # workflow that owns the existing resolution plan.
                 if existing_plan.workflow_id != workflow_id:
@@ -685,6 +698,13 @@ def run_supervisor(
             )
 
             child_workflow_id = child_workflow.workflow_id
+
+            register_supervisor_exception_workflow(
+                db=db,
+                supervisor_workflow_id=workflow_id,
+                exception_workflow_id=child_workflow_id,
+                exception_id=exception_id,
+            )
 
             db.commit()
 
@@ -930,6 +950,14 @@ def run_supervisor(
                         exception_workflow_id=child_workflow_id
                     )
 
+                    register_supervisor_exception_workflow(
+                        db=db,
+                        supervisor_workflow_id=workflow_id,
+                        exception_workflow_id=child_workflow_id,
+                        exception_id=exception_id,
+                        action_id=action.action_id,
+                    )
+
                 db.commit()
 
                 plan_result["existing_plan"] = False
@@ -1006,26 +1034,42 @@ def run_supervisor(
 
         completed_at = datetime.now()
 
-        if results["resolution_plans"]:
+        linked_workflow_count = (
+            db.query(SupervisorWorkflowLink)
+            .filter(
+                SupervisorWorkflowLink.supervisor_workflow_id == workflow_id
+            )
+            .count()
+        )
 
+        if linked_workflow_count:
+            refresh_supervisor_workflow_status(
+                db=db,
+                supervisor_workflow_id=workflow_id,
+                current_time=completed_at,
+            )
+            workflow = (
+                db.query(AgentWorkflow)
+                .filter(AgentWorkflow.workflow_id == workflow_id)
+                .first()
+            )
+            supervisor_run = (
+                db.query(AgentRun)
+                .filter(AgentRun.run_id == supervisor_run_id)
+                .first()
+            )
+        elif results["resolution_plans"]:
             workflow.status = "WAITING_FOR_APPROVAL"
             workflow.current_node = "WAITING_FOR_APPROVAL"
-
             supervisor_run.execution_status = "WAITING_FOR_APPROVAL"
-
         elif results["errors"]:
-
             workflow.status = "FAILED"
             workflow.current_node = "SUPERVISOR_COMPLETED_WITH_ERRORS"
-
             supervisor_run.execution_status = "FAILED"
-
         else:
-
             workflow.status = "COMPLETED"
             workflow.current_node = "SUPERVISOR_COMPLETED"
             workflow.completed_at = completed_at
-
             supervisor_run.execution_status = "COMPLETED"
 
         supervisor_run.output_data = make_json_safe(results)
