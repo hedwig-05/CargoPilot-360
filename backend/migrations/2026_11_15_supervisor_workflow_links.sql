@@ -31,3 +31,26 @@ CREATE TABLE IF NOT EXISTS supervisor_workflow_links (
         FOREIGN KEY (action_id)
         REFERENCES actions(action_id)
 );
+
+
+-- Backfill associations from existing Supervisor-linked actions.
+-- The unique key makes this safe to re-run.
+INSERT INTO supervisor_workflow_links (
+    supervisor_workflow_id,
+    exception_workflow_id,
+    exception_id,
+    action_id
+)
+SELECT
+    CAST(JSON_UNQUOTE(JSON_EXTRACT(action_payload, '$.supervisor_workflow_id')) AS UNSIGNED),
+    CAST(JSON_UNQUOTE(JSON_EXTRACT(action_payload, '$.exception_workflow_id')) AS UNSIGNED),
+    CAST(JSON_UNQUOTE(JSON_EXTRACT(action_payload, '$.exception_id')) AS UNSIGNED),
+    action_id
+FROM actions
+WHERE action_payload IS NOT NULL
+  AND JSON_VALID(action_payload)
+  AND JSON_EXTRACT(action_payload, '$.supervisor_workflow_id') IS NOT NULL
+  AND JSON_EXTRACT(action_payload, '$.exception_workflow_id') IS NOT NULL
+  AND JSON_EXTRACT(action_payload, '$.exception_id') IS NOT NULL
+ON DUPLICATE KEY UPDATE
+    action_id = VALUES(action_id);
