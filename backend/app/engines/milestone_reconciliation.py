@@ -9,7 +9,37 @@ from app.models import (
 )
 
 
-REQUIRED_VALIDATION_COUNT = 13
+# These fields are essential to identify and reconcile the shipment.
+# cargo_description is checked when present, but is not a mandatory identifier.
+REQUIRED_SHARED_FIELDS = [
+    "shipment_ref",
+    "container_no",
+    "shipper",
+    "consignee"
+]
+
+REQUIRED_SHIPMENT_FIELDS = [
+    "shipment_ref",
+    "container_no",
+    "shipper",
+    "consignee"
+]
+
+
+def _required_validation_keys(invoice_id, bill_of_lading_id):
+    """Build the exact evidence keys required for the current document pair."""
+
+    required = set()
+
+    for field in REQUIRED_SHARED_FIELDS:
+        required.add((invoice_id, bill_of_lading_id, field))
+        required.add((bill_of_lading_id, invoice_id, field))
+
+    for document_id in (invoice_id, bill_of_lading_id):
+        for field in REQUIRED_SHIPMENT_FIELDS:
+            required.add((document_id, None, field))
+
+    return required
 
 
 def assess_milestone_reconciliation(
@@ -51,7 +81,8 @@ def assess_milestone_reconciliation(
 
     latest = {}
     for document in documents:
-        latest.setdefault(document.document_type, document)
+        if document.shipment_id == event.shipment_id:
+            latest.setdefault(document.document_type, document)
 
     invoice = latest.get("COMMERCIAL_INVOICE")
     bill_of_lading = latest.get("BILL_OF_LADING")
@@ -94,9 +125,8 @@ def assess_milestone_reconciliation(
             }
         }
 
-    # Keep only validation rows involving the current document pair.
-    # Older rows for the same BOL may reference a superseded invoice
-    # version and must not make current evidence appear stale.
+    # Query only evidence for the current invoice/BOL pair and their
+    # comparisons against the shipment master record.
     current_pair_validations = or_(
         and_(
             DocumentValidation.document_id == invoice.document_id,
@@ -115,19 +145,78 @@ def assess_milestone_reconciliation(
         )
     )
 
-    validations = db.query(DocumentValidation).filter(
+    queried_validations = db.query(DocumentValidation).filter(
         DocumentValidation.shipment_id == event.shipment_id,
         current_pair_validations
     ).all()
 
-    if len(validations) < REQUIRED_VALIDATION_COUNT:
+    # Apply the same scope in Python as a defensive check. This also makes
+    # the evidence boundary explicit and prevents unrelated rows from
+    # satisfying the requirements if a query implementation is faulty.
+    document_ids = {invoice.document_id, bill_of_lading.document_id}
+    validations = [
+        item for item in queried_validations
+        if item.shipment_id == event.shipment_id
+        and item.document_id in document_ids
+        and (
+            item.compared_document_id is None
+            or (
+                item.document_id == invoice.document_id
+                and item.compared_document_id == bill_of_lading.document_id
+            )
+            or (
+                item.document_id == bill_of_lading.document_id
+                and item.compared_document_id == invoice.document_id
+            )
+        )
+    ]
+
+    required_keys = _required_validation_keys(
+        invoice.document_id,
+        bill_of_lading.document_id
+    )
+    actual_keys = [
+        (item.document_id, item.compared_document_id, item.field_name)
+        for item in validations
+    ]
+    actual_key_set = set(actual_keys)
+
+    missing_keys = sorted(
+        required_keys - actual_key_set,
+        key=lambda key: (key[0], key[1] or 0, key[2])
+    )
+
+    duplicate_keys = sorted(
+        {
+            key for key in actual_keys
+            if actual_keys.count(key) > 1
+        },
+        key=lambda key: (key[0], key[1] or 0, key[2])
+    )
+
+    if missing_keys or duplicate_keys:
         return {
             "event_id": event.event_id,
             "event_status": event.event_status,
             "ready_for_confirmation": False,
-            "reason": "Fresh validation evidence is incomplete.",
+            "reason": "Required validation field coverage is incomplete or duplicated.",
             "validation_count": len(validations),
-            "required_validation_count": REQUIRED_VALIDATION_COUNT
+            "missing_validation_keys": [
+                {
+                    "document_id": key[0],
+                    "compared_document_id": key[1],
+                    "field": key[2]
+                }
+                for key in missing_keys
+            ],
+            "duplicate_validation_keys": [
+                {
+                    "document_id": key[0],
+                    "compared_document_id": key[1],
+                    "field": key[2]
+                }
+                for key in duplicate_keys
+            ]
         }
 
     latest_upload_time = max(
@@ -193,7 +282,7 @@ def assess_milestone_reconciliation(
         "ready_for_confirmation": True,
         "reason": (
             "Latest invoice and bill of lading are extracted, valid, "
-            "and supported by matching validation records. A manager "
+            "and supported by complete matching validation evidence. A manager "
             "must still confirm that the operational milestone occurred."
         ),
         "latest_document_ids": {
