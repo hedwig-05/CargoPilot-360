@@ -83,6 +83,9 @@ def refresh_supervisor_workflow_status(
         .all()
     )
 
+    if not links:
+        return None
+
     summaries = []
     child_statuses = []
 
