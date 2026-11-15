@@ -1297,6 +1297,15 @@ def continue_supervisor(
 
         if linked_run:
             previous_output = dict(linked_run.output_data or {})
+            action_outcomes = list(previous_output.get("action_outcomes") or [])
+            action_outcomes.append({
+                "action_id": action_id,
+                "exception_id": exception_id,
+                "execution": execution_result,
+                "verification": verification_result,
+                "resolution_verified": resolution_verified,
+            })
+            previous_output["action_outcomes"] = action_outcomes
             previous_output["last_action_execution"] = execution_result
             previous_output["last_verification"] = verification_result
             previous_output["last_resolution_verified"] = resolution_verified
