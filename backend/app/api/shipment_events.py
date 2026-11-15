@@ -5,7 +5,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from app.database.connection import get_db
-from app.models import ShipmentEvent, AuditLog
+from app.models import ShipmentEvent, AuditLog, Shipment
 from app.models.user import User
 from app.auth.dependencies import get_current_user, require_roles
 from app.engines.milestone_reconciliation import assess_milestone_reconciliation
@@ -101,6 +101,20 @@ def confirm_shipment_event(
         require_roles("ADMIN", "MANAGER")
     )
 ):
+    # Acquire the shipment lock first. Document uploads use the same
+    # parent-row lock while selecting document versions and validating them.
+    # This serializes confirmation against an in-progress upload/validation
+    # transaction and avoids assessing a partially updated document set.
+    shipment = db.query(Shipment).filter(
+        Shipment.shipment_id == shipment_id
+    ).with_for_update().first()
+
+    if not shipment:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Shipment not found."
+        )
+
     event = db.query(ShipmentEvent).filter(
         ShipmentEvent.event_id == event_id,
         ShipmentEvent.shipment_id == shipment_id
