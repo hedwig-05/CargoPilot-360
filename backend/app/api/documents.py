@@ -1,5 +1,6 @@
 
 import hashlib
+import logging
 from pathlib import Path
 
 from fastapi import (
@@ -19,6 +20,8 @@ from app.auth.dependencies import require_roles
 from app.engines.document_processing import process_document
 from app.engines.document_validation import validate_shipment_documents
 
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(
     prefix="/api/shipments",
@@ -321,7 +324,7 @@ async def upload_document(
                 detail={
                     "message": "Document uploaded, but extraction failed.",
                     "document_id": document_id,
-                    "error": str(processing_error)
+                    "error": "DOCUMENT_EXTRACTION_FAILED"
                 }
             )
 
@@ -334,33 +337,50 @@ async def upload_document(
         validation_error = None
 
         if document_type in {"COMMERCIAL_INVOICE", "BILL_OF_LADING"}:
-            required_documents = db.query(Document).filter(
-                Document.shipment_id == shipment_id,
-                Document.document_type.in_([
-                    "COMMERCIAL_INVOICE",
-                    "BILL_OF_LADING"
-                ])
-            ).all()
+            required_documents = (
+                db.query(Document)
+                .filter(
+                    Document.shipment_id == shipment_id,
+                    Document.document_type.in_([
+                        "COMMERCIAL_INVOICE",
+                        "BILL_OF_LADING"
+                    ])
+                )
+                .order_by(
+                    Document.version_no.desc(),
+                    Document.upload_date.desc(),
+                    Document.document_id.desc()
+                )
+                .all()
+            )
 
-            extracted_types = {
-                item.document_type
-                for item in required_documents
-                if item.extraction_status == "EXTRACTED"
-            }
+            # Validate only the latest version of each required type.
+            latest_documents = {}
+            for item in required_documents:
+                latest_documents.setdefault(item.document_type, item)
 
-            if extracted_types == {
-                "COMMERCIAL_INVOICE",
-                "BILL_OF_LADING"
-            }:
+            latest_invoice = latest_documents.get("COMMERCIAL_INVOICE")
+            latest_bill_of_lading = latest_documents.get("BILL_OF_LADING")
+
+            if (
+                latest_invoice is not None
+                and latest_bill_of_lading is not None
+                and latest_invoice.extraction_status == "EXTRACTED"
+                and latest_bill_of_lading.extraction_status == "EXTRACTED"
+            ):
                 try:
                     validation_result = validate_shipment_documents(
                         db=db,
                         shipment_id=shipment_id,
                         commit=True
                     )
-                except Exception as validation_exception:
+                except Exception:
                     db.rollback()
-                    validation_error = str(validation_exception)
+                    logger.exception(
+                        "Document validation failed for shipment_id=%s",
+                        shipment_id
+                    )
+                    validation_error = "DOCUMENT_VALIDATION_FAILED"
 
         # ------------------------------------------
         # STEP 12: RETURN RESULT
