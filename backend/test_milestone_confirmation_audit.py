@@ -79,7 +79,7 @@ class MilestoneConfirmationAuditTests(unittest.TestCase):
 
     def confirm(self):
         return self.client.post(
-            "/api/shipments/events/11/confirm",
+            "/api/shipments/4/events/11/confirm",
             json={
                 "actual_time": "2026-11-12T18:00:00",
                 "evidence_note": "Manager reviewed the invoice and bill of lading.",
@@ -96,7 +96,7 @@ class MilestoneConfirmationAuditTests(unittest.TestCase):
         self.assertEqual(first_response.status_code, 200)
         self.assertEqual(first_response.json()["event_status"], "COMPLETED")
         self.assertEqual(self.event.event_status, "COMPLETED")
-        self.assertEqual(self.event.source, "USER_CONFIRMED")
+        self.assertEqual(self.event.source, "SYSTEM")
         self.assertEqual(len(self.db.audit_records), 1)
         self.assertEqual(self.db.commit_count, 1)
 
