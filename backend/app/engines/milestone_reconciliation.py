@@ -79,6 +79,18 @@ def assess_milestone_reconciliation(
         .all()
     )
 
+    # Keep the ordering deterministic even for test doubles or alternate
+    # query implementations that do not apply SQLAlchemy order_by().
+    documents = sorted(
+        documents,
+        key=lambda document: (
+            document.version_no,
+            document.upload_date,
+            document.document_id
+        ),
+        reverse=True
+    )
+
     latest = {}
     for document in documents:
         if document.shipment_id == event.shipment_id:
