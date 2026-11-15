@@ -29,7 +29,9 @@ class RiskAssessmentFactor(Base):
             "ARRIVAL_DELAY",
             "MISSING_MILESTONE",
             "CUSTOMS_ISSUE",
-            "STAKEHOLDER_DELAY"
+            "STAKEHOLDER_DELAY",
+            "DAMAGE_SHORTAGE",
+            "ROLLED_CARGO"
         ),
         nullable=False
     )

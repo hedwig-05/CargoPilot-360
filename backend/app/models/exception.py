@@ -33,7 +33,9 @@ class Exception(Base):
             "MISSING_MILESTONE",
             "CUSTOMS_HOLD",
             "STAKEHOLDER_RESPONSE_DELAY",
-            "CONTAINER_NOT_DISCHARGED"
+            "CONTAINER_NOT_DISCHARGED",
+            "DAMAGE_SHORTAGE",
+            "ROLLED_CARGO"
         ),
         nullable=False
     )
@@ -53,6 +55,7 @@ class Exception(Base):
             "AWAITING_APPROVAL",
             "IN_PROGRESS",
             "AWAITING_RESPONSE",
+            "PENDING_3RD_PARTY",
             "RESOLVED",
             "CLOSED"
         ),
@@ -92,7 +95,11 @@ class Exception(Base):
         server_default=func.now()
     )
 
+    acknowledged_at = Column(DateTime, nullable=True)
+
     resolved_at = Column(DateTime, nullable=True)
+
+    total_paused_minutes = Column(Integer, nullable=False, default=0, server_default="0")
 
     resolution_notes = Column(Text, nullable=True)
 

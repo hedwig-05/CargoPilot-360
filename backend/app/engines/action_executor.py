@@ -5,6 +5,8 @@ from datetime import datetime
 
 from sqlalchemy.orm import Session
 
+from app.engines.exception_lifecycle import transition_exception_status
+
 from app.models import (
     Action,
     ActionExecution,
@@ -618,7 +620,12 @@ def execute_action(
             "CLOSED"
         ]:
 
-            exception.status = "IN_PROGRESS"
+            transition_exception_status(
+                db=db,
+                exception_id=exception.exception_id,
+                new_status="IN_PROGRESS",
+                commit=False
+            )
 
         db.commit()
 

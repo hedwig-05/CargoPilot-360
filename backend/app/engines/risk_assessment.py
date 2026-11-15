@@ -2,11 +2,13 @@
 from datetime import datetime
 from decimal import Decimal
 
-from sqlalchemy.orm import Session
+from sqlalchemy import and_, func, or_
+from sqlalchemy.orm import Session, aliased
 
 from app.models import (
     Shipment,
     ShipmentEvent,
+    Document,
     DocumentValidation,
     Exception as ShipmentException,
     RiskAssessment,
@@ -25,7 +27,8 @@ ACTIVE_EXCEPTION_STATUSES = [
     "INVESTIGATING",
     "AWAITING_APPROVAL",
     "IN_PROGRESS",
-    "AWAITING_RESPONSE"
+    "AWAITING_RESPONSE",
+    "PENDING_3RD_PARTY"
 ]
 
 SEVERITY_WEIGHTS = {
@@ -135,7 +138,9 @@ def detect_risk_factors(db: Session, shipment_id: int):
         "ARRIVAL_DELAY": [],
         "MISSING_MILESTONE": [],
         "CUSTOMS_ISSUE": [],
-        "STAKEHOLDER_DELAY": []
+        "STAKEHOLDER_DELAY": [],
+        "DAMAGE_SHORTAGE": [],
+        "ROLLED_CARGO": []
     }
 
     # --------------------------------------------------
@@ -221,6 +226,24 @@ def detect_risk_factors(db: Session, shipment_id: int):
                     ),
                     "exception_id": item.exception_id
                 })
+
+        # Physical cargo damage or shortage
+        elif item.exception_type == "DAMAGE_SHORTAGE":
+            evidence["DAMAGE_SHORTAGE"].append({
+                "detail": description,
+                "severity": item.severity,
+                "issue_key": f"exception:{item.exception_id}",
+                "exception_id": item.exception_id
+            })
+
+        # Rolled cargo / cargo not loaded on the intended sailing
+        elif item.exception_type == "ROLLED_CARGO":
+            evidence["ROLLED_CARGO"].append({
+                "detail": description,
+                "severity": item.severity,
+                "issue_key": f"exception:{item.exception_id}",
+                "exception_id": item.exception_id
+            })
 
         # SHIPMENT DELAY
 
@@ -336,12 +359,72 @@ def detect_risk_factors(db: Session, shipment_id: int):
     # 2. DOCUMENT VALIDATION EVIDENCE
     # --------------------------------------------------
 
+    # First identify the highest version number for each document type
+    # belonging to this shipment. Validation timestamps are deliberately
+    # not used: revalidating an archived document must not make it current.
+    latest_versions = (
+        db.query(
+            Document.document_type.label("document_type"),
+            func.max(Document.version_no).label("latest_version_no")
+        )
+        .filter(Document.shipment_id == shipment_id)
+        .group_by(Document.document_type)
+        .subquery()
+    )
+
+    # Resolve those version numbers back to their document IDs. This keeps
+    # versioning independent for invoices, bills of lading, packing lists,
+    # and other document types.
+    latest_documents = (
+        db.query(Document.document_id.label("document_id"))
+        .join(
+            latest_versions,
+            and_(
+                Document.document_type == latest_versions.c.document_type,
+                Document.version_no == latest_versions.c.latest_version_no
+            )
+        )
+        .filter(Document.shipment_id == shipment_id)
+        .subquery()
+    )
+
+    # For cross-document validations, the compared document must also be
+    # the latest version of its own document type. A direct comparison
+    # against an archived document is historical evidence, not current risk.
+    ComparedDocument = aliased(Document)
+
+    compared_document_is_current = (
+        db.query(ComparedDocument.document_id)
+        .join(
+            latest_versions,
+            and_(
+                ComparedDocument.document_type == latest_versions.c.document_type,
+                ComparedDocument.version_no == latest_versions.c.latest_version_no
+            )
+        )
+        .filter(
+            ComparedDocument.document_id
+            == DocumentValidation.compared_document_id,
+            ComparedDocument.shipment_id == shipment_id
+        )
+        .exists()
+    )
+
     validations = (
         db.query(DocumentValidation)
+        .join(
+            latest_documents,
+            latest_documents.c.document_id
+            == DocumentValidation.document_id
+        )
         .filter(
             DocumentValidation.shipment_id == shipment_id,
             DocumentValidation.validation_result.in_(
                 ["MISMATCH", "MISSING", "UNCERTAIN"]
+            ),
+            or_(
+                DocumentValidation.compared_document_id.is_(None),
+                compared_document_is_current
             )
         )
         .all()
@@ -601,12 +684,19 @@ def calculate_risk_score(rules, evidence):
 
     total_score = Decimal("0.00")
 
+    # Preserve v1.1 scoring until a separate MISSING_DOCUMENT rule exists.
+    configured_codes = {rule.factor_code for rule in rules}
+    legacy_document_evidence = "MISSING_DOCUMENT" not in configured_codes
+
     for rule in rules:
 
         raw_evidence = evidence.get(
             rule.factor_code,
             []
         )
+
+        if rule.factor_code == "DOCUMENT_MISMATCH" and legacy_document_evidence:
+            raw_evidence = list(raw_evidence) + list(evidence.get("MISSING_DOCUMENT", []))
 
         # Remove duplicate representations.
 
@@ -1005,3 +1095,149 @@ def assess_shipment_risk(
         db.rollback()
 
         raise
+
+
+
+# ==================================================
+# PREVIEW SHIPMENT RISK WITH A DRAFT CONFIGURATION
+# ==================================================
+
+def preview_shipment_risk(
+    db: Session,
+    shipment_id: int,
+    configuration_id: int
+):
+    """
+    Calculate a shipment's risk using a selected DRAFT configuration.
+
+    This is a read-only preview:
+    - It does not create a RiskAssessment.
+    - It does not create RiskAssessmentFactor rows.
+    - It does not update the shipment's current risk fields.
+    - It does not change configuration statuses.
+    """
+
+    shipment = (
+        db.query(Shipment)
+        .filter(Shipment.shipment_id == shipment_id)
+        .first()
+    )
+
+    if not shipment:
+        raise ValueError(
+            f"Shipment {shipment_id} was not found."
+        )
+
+    if shipment.status == "CANCELLED":
+        raise ValueError(
+            "Cannot preview risk for a cancelled shipment."
+        )
+
+    configuration = (
+        db.query(RiskConfiguration)
+        .filter(
+            RiskConfiguration.configuration_id == configuration_id
+        )
+        .first()
+    )
+
+    if not configuration:
+        raise ValueError(
+            f"Risk configuration {configuration_id} was not found."
+        )
+
+    if configuration.status != "DRAFT":
+        raise ValueError(
+            "Risk preview only accepts DRAFT configurations. "
+            "Use the normal calculation endpoint for the active configuration."
+        )
+
+    rules = (
+        db.query(RiskFactorRule)
+        .filter(
+            RiskFactorRule.configuration_id == configuration_id,
+            RiskFactorRule.is_enabled.is_(True)
+        )
+        .order_by(RiskFactorRule.rule_id.asc())
+        .all()
+    )
+
+    if not rules:
+        raise ValueError(
+            "The selected draft configuration has no enabled rules."
+        )
+
+    enabled_weight_total = sum(
+        (Decimal(str(rule.weight)) for rule in rules),
+        Decimal("0.00")
+    )
+
+    if enabled_weight_total != Decimal("100.00"):
+        raise ValueError(
+            "Enabled risk factor weights must total 100 before preview."
+        )
+
+    evidence = detect_risk_factors(
+        db,
+        shipment_id
+    )
+
+    risk_score, factor_results = calculate_risk_score(
+        rules,
+        evidence
+    )
+
+    risk_level = determine_risk_level(
+        risk_score,
+        configuration
+    )
+
+    previous_assessment = (
+        db.query(RiskAssessment)
+        .filter(
+            RiskAssessment.shipment_id == shipment_id
+        )
+        .order_by(
+            RiskAssessment.assessed_at.desc(),
+            RiskAssessment.risk_id.desc()
+        )
+        .first()
+    )
+
+    previous_score = (
+        previous_assessment.risk_score
+        if previous_assessment
+        else None
+    )
+
+    explanation_parts = []
+
+    for factor in factor_results:
+        if factor["points_awarded"] > 0:
+            explanation_parts.append(
+                f"{factor['factor_code']}: "
+                f"{factor['points_awarded']:.2f} points"
+            )
+
+    explanation = (
+        "; ".join(explanation_parts)
+        if explanation_parts
+        else "No active risk evidence detected."
+    )
+
+    return {
+        "success": True,
+        "preview_only": True,
+        "saved": False,
+        "shipment_id": shipment_id,
+        "shipment_ref": shipment.shipment_ref,
+        "configuration_id": configuration.configuration_id,
+        "configuration_version": configuration.version,
+        "configuration_status": configuration.status,
+        "risk_score": risk_score,
+        "risk_level": risk_level,
+        "previous_saved_score": previous_score,
+        "assessment_method": "RULES_PREVIEW",
+        "explanation": explanation,
+        "factors": factor_results
+    }

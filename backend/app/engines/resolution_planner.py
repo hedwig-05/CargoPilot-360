@@ -5,6 +5,8 @@ from datetime import datetime
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
+from app.engines.exception_lifecycle import transition_exception_status
+
 from app.models import (
     Exception as ShipmentException,
     AgentWorkflow,
@@ -69,6 +71,22 @@ RESOLUTION_RULES = {
         "action_type": "ESCALATE_TO_MANAGER",
         "description": (
             "Escalate the container discharge issue to management."
+        )
+    },
+
+    "DAMAGE_SHORTAGE": {
+        "action_type": "ESCALATE_TO_MANAGER",
+        "description": (
+            "Escalate the reported cargo damage or shortage for "
+            "inspection, quantity reconciliation and claims review."
+        )
+    },
+
+    "ROLLED_CARGO": {
+        "action_type": "NOTIFY_OPERATIONS_OFFICER",
+        "description": (
+            "Notify operations to confirm the carrier's roll-over reason "
+            "and arrange the next available sailing."
         )
     }
 }
@@ -461,7 +479,13 @@ def create_resolution_plan(
         # 15. UPDATE EXCEPTION AND WORKFLOW
         # ------------------------------------------
 
-        exception.status = "AWAITING_APPROVAL"
+        transition_exception_status(
+            db=db,
+            exception_id=exception.exception_id,
+            new_status="AWAITING_APPROVAL",
+            operator_id=triggered_by,
+            commit=False
+        )
 
         workflow.status = "WAITING_FOR_APPROVAL"
 

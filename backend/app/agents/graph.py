@@ -1075,7 +1075,9 @@ def route_after_monitoring(state: CargoPilotState):
     if state["detected_exceptions"]:
         return "investigate"
 
-    return "finish"
+    # Even shipments without active exceptions need a fresh
+    # shipment-level risk assessment before the workflow finishes.
+    return "risk_assessment"
 
 
 def route_after_investigation(state: CargoPilotState):
@@ -1089,6 +1091,11 @@ def route_after_investigation(state: CargoPilotState):
 def route_after_risk_assessment(state: CargoPilotState):
 
     if state["workflow_status"] == "FAILED":
+        return "finish"
+
+    # A clean shipment has no resolution decision to make.
+    # Its risk assessment is still recorded before finishing.
+    if not state.get("exception_details"):
         return "finish"
 
     return "decision"
@@ -1243,6 +1250,7 @@ builder.add_conditional_edges(
     route_after_monitoring,
     {
         "investigate": "investigation",
+        "risk_assessment": "risk_assessment",
         "finish": "finish"
     }
 )

@@ -5,7 +5,10 @@ from sqlalchemy.orm import Session
 from app.database.connection import get_db
 from app.models import RiskAssessment
 from app.api.helpers import serialize_records, get_all_records
-from app.engines.risk_assessment import assess_shipment_risk
+from app.engines.risk_assessment import (
+    assess_shipment_risk,
+    preview_shipment_risk
+)
 from app.auth.dependencies import get_current_user
 
 
@@ -69,4 +72,34 @@ def calculate_shipment_risk(
         raise HTTPException(
             status_code=500,
             detail="Risk assessment failed."
+        )
+
+
+
+# PREVIEW SHIPMENT RISK WITH A DRAFT CONFIGURATION
+
+@router.post("/shipments/{shipment_id}/risk-assessments/preview")
+def preview_shipment_risk_assessment(
+    shipment_id: int,
+    configuration_id: int,
+    db: Session = Depends(get_db),
+    current_user=Depends(get_current_user)
+):
+    try:
+        return preview_shipment_risk(
+            db=db,
+            shipment_id=shipment_id,
+            configuration_id=configuration_id
+        )
+
+    except ValueError as error:
+        raise HTTPException(
+            status_code=400,
+            detail=str(error)
+        )
+
+    except Exception:
+        raise HTTPException(
+            status_code=500,
+            detail="Risk preview failed."
         )
