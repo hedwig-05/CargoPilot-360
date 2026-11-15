@@ -13,6 +13,9 @@ from app.models import (
 from app.engines.workflow_dependencies import (
     update_dependent_workflows
 )
+from app.engines.supervisor_lifecycle import (
+    refresh_supervisors_for_action
+)
 
 # ==================================================
 # APPROVAL CONFIGURATION
@@ -214,6 +217,13 @@ def approve_action(
             current_time=current_time,
         )
 
+        # Refresh every shipment-level Supervisor tracking this action.
+        refresh_supervisors_for_action(
+            db=db,
+            action_id=action.action_id,
+            current_time=current_time,
+        )
+
         # Create audit record
         create_approval_audit_log(
             db=db,
@@ -301,6 +311,13 @@ def reject_action(
             outcome="REJECTED",
             current_time=current_time
         )
+        # Refresh every shipment-level Supervisor tracking this action.
+        refresh_supervisors_for_action(
+            db=db,
+            action_id=action.action_id,
+            current_time=current_time,
+        )
+
         # Refresh every shipment-level Supervisor tracking this action.
         refresh_supervisors_for_action(
             db=db,
