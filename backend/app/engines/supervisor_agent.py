@@ -1089,14 +1089,21 @@ def run_supervisor(
         db.commit()
 
         return {
-            "success": not results["errors"],
+            "success": (
+                workflow.status not in ["FAILED", "CANCELLED"]
+                and not results["errors"]
+            ),
             "message": (
-                "Supervisor completed with resolution plans awaiting approval."
-                if results["resolution_plans"]
+                "Supervisor is waiting for human approval."
+                if workflow.status == "WAITING_FOR_APPROVAL"
                 else (
-                    "Supervisor execution completed with errors."
-                    if results["errors"]
-                    else "Supervisor execution completed successfully."
+                    "Supervisor is waiting for linked exception workflows to finish."
+                    if workflow.status == "RUNNING"
+                    else (
+                        "Supervisor execution completed with errors."
+                        if workflow.status == "FAILED" or results["errors"]
+                        else "Supervisor execution completed successfully."
+                    )
                 )
             ),
             "workflow_id": workflow_id,
