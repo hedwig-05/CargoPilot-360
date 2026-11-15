@@ -1203,6 +1203,20 @@ def continue_supervisor(
             "The approved action does not contain an exception ID."
         )
 
+    linked_supervisor_workflow_ids = [
+        link.supervisor_workflow_id
+        for link in (
+            db.query(SupervisorWorkflowLink)
+            .filter(SupervisorWorkflowLink.action_id == action_id)
+            .all()
+        )
+    ]
+
+    if supervisor_workflow_id and supervisor_workflow_id not in linked_supervisor_workflow_ids:
+        linked_supervisor_workflow_ids.append(supervisor_workflow_id)
+
+    supervisor_workflow_ids = linked_supervisor_workflow_ids
+
     # --------------------------------------------------
     # 2. EXECUTE ACTION
     # --------------------------------------------------
@@ -1214,10 +1228,29 @@ def continue_supervisor(
 
     if not execution_result.get("success"):
 
+        for linked_workflow_id in supervisor_workflow_ids:
+            refresh_supervisor_workflow_status(
+                db=db,
+                supervisor_workflow_id=linked_workflow_id,
+            )
+
+        db.commit()
+
         return {
             "success": False,
             "message": "Action execution failed.",
-            "execution": execution_result
+            "execution": execution_result,
+            "supervisor_workflows": [
+                {
+                    "workflow_id": linked_workflow_id,
+                    "status": (
+                        db.query(AgentWorkflow)
+                        .filter(AgentWorkflow.workflow_id == linked_workflow_id)
+                        .first().status
+                    )
+                }
+                for linked_workflow_id in supervisor_workflow_ids
+            ]
         }
 
     # --------------------------------------------------
@@ -1239,59 +1272,39 @@ def continue_supervisor(
     )
 
     # --------------------------------------------------
-    # 4. UPDATE SUPERVISOR WORKFLOW
+    # 4. UPDATE EVERY LINKED SUPERVISOR WORKFLOW
     # --------------------------------------------------
 
-    workflow = None
-    supervisor_run = None
+    supervisor_results = []
 
-    if supervisor_workflow_id:
+    for linked_workflow_id in supervisor_workflow_ids:
 
-        workflow = (
-            db.query(AgentWorkflow)
-            .filter(
-                AgentWorkflow.workflow_id == supervisor_workflow_id
-            )
-            .first()
-        )
-
-    if supervisor_run_id:
-
-        supervisor_run = (
+        linked_run = (
             db.query(AgentRun)
             .filter(
-                AgentRun.run_id == supervisor_run_id
+                AgentRun.workflow_id == linked_workflow_id,
+                AgentRun.agent_type == "SUPERVISOR"
             )
+            .order_by(AgentRun.step_no.desc())
             .first()
         )
 
-    if workflow:
+        if linked_run:
+            previous_output = dict(linked_run.output_data or {})
+            previous_output["last_action_execution"] = execution_result
+            previous_output["last_verification"] = verification_result
+            previous_output["last_resolution_verified"] = resolution_verified
+            linked_run.output_data = make_json_safe(previous_output)
 
-        workflow.current_node = (
-            "RESOLUTION_VERIFIED"
-            if resolution_verified
-            else "RESOLUTION_NOT_VERIFIED"
+        lifecycle = refresh_supervisor_workflow_status(
+            db=db,
+            supervisor_workflow_id=linked_workflow_id,
         )
 
-        # The workflow has finished its execution cycle.
-        # Verification outcome is recorded separately.
-        workflow.status = "COMPLETED"
-        workflow.completed_at = datetime.now()
+        if lifecycle:
+            supervisor_results.append(lifecycle)
 
-    if supervisor_run:
-
-        previous_output = dict(
-            supervisor_run.output_data or {}
-        )
-
-        previous_output["action_execution"] = execution_result
-        previous_output["verification"] = verification_result
-        previous_output["resolution_verified"] = resolution_verified
-
-        supervisor_run.output_data = make_json_safe(previous_output)
-
-        supervisor_run.execution_status = "COMPLETED"
-        supervisor_run.completed_at = datetime.now()
+    db.commit()
 
     db.commit()
 
@@ -1309,7 +1322,9 @@ def continue_supervisor(
         "verification": verification_result,
         "verification_status": verification_status,
         "resolution_verified": resolution_verified,
+        "supervisor_workflows": supervisor_results,
         "supervisor_workflow_status": (
-            workflow.status if workflow else None
+            supervisor_results[0]["workflow_status"]
+            if supervisor_results else None
         )
     }
