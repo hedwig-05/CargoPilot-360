@@ -21,6 +21,9 @@ from app.models import (
 from app.engines.workflow_dependencies import (
     update_dependent_workflows
 )
+from app.engines.supervisor_lifecycle import (
+    refresh_supervisors_for_action
+)
 
 
 # ==================================================
@@ -702,6 +705,12 @@ def execute_action(
                 current_time=completed_at
             )
 
+            refresh_supervisors_for_action(
+                db=db,
+                action_id=action.action_id,
+                current_time=completed_at,
+            )
+
             db.commit()
 
             return {
@@ -842,6 +851,12 @@ def execute_action(
                 outcome="FAILED",
                 current_time=completed_at,
                 error_message=error_message
+            )
+
+            refresh_supervisors_for_action(
+                db=db,
+                action_id=action.action_id,
+                current_time=completed_at,
             )
 
             db.commit()
