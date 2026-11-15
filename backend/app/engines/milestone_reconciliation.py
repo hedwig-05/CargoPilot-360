@@ -1,3 +1,4 @@
+from sqlalchemy import and_, or_
 from sqlalchemy.orm import Session
 
 from app.models import (
@@ -93,12 +94,30 @@ def assess_milestone_reconciliation(
             }
         }
 
+    # Keep only validation rows involving the current document pair.
+    # Older rows for the same BOL may reference a superseded invoice
+    # version and must not make current evidence appear stale.
+    current_pair_validations = or_(
+        and_(
+            DocumentValidation.document_id == invoice.document_id,
+            DocumentValidation.compared_document_id == bill_of_lading.document_id
+        ),
+        and_(
+            DocumentValidation.document_id == bill_of_lading.document_id,
+            DocumentValidation.compared_document_id == invoice.document_id
+        ),
+        and_(
+            DocumentValidation.document_id.in_([
+                invoice.document_id,
+                bill_of_lading.document_id
+            ]),
+            DocumentValidation.compared_document_id.is_(None)
+        )
+    )
+
     validations = db.query(DocumentValidation).filter(
         DocumentValidation.shipment_id == event.shipment_id,
-        DocumentValidation.document_id.in_([
-            invoice.document_id,
-            bill_of_lading.document_id
-        ])
+        current_pair_validations
     ).all()
 
     if len(validations) < REQUIRED_VALIDATION_COUNT:
