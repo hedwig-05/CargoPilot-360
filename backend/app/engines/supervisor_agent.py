@@ -1102,7 +1102,11 @@ def run_supervisor(
                     else (
                         "Supervisor execution completed with errors."
                         if workflow.status == "FAILED" or results["errors"]
-                        else "Supervisor execution completed successfully."
+                        else (
+                            "Supervisor workflow was cancelled."
+                            if workflow.status == "CANCELLED"
+                            else "Supervisor execution completed successfully."
+                        )
                     )
                 )
             ),
