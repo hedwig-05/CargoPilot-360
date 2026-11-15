@@ -90,6 +90,31 @@ class MilestoneConfirmationAuditTests(unittest.TestCase):
         "app.api.shipment_events.assess_milestone_reconciliation",
         return_value={"ready_for_confirmation": True},
     )
+    def test_offset_aware_actual_time_is_normalized_to_utc(self, assessment):
+        response = self.client.post(
+            "/api/shipments/4/events/11/confirm",
+            json={
+                "actual_time": "2026-11-12T21:00:00+05:30",
+                "evidence_note": "Manager verified the milestone evidence.",
+            },
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(
+            self.event.actual_time,
+            datetime(2026, 11, 12, 15, 30),
+        )
+        self.assertEqual(
+            self.db.audit_records[0].details["actual_time"],
+            "2026-11-12T15:30:00",
+        )
+        self.assertEqual(self.event.source, "SYSTEM")
+        assessment.assert_called_once()
+
+    @patch(
+        "app.api.shipment_events.assess_milestone_reconciliation",
+        return_value={"ready_for_confirmation": True},
+    )
     def test_successful_confirmation_creates_one_audit_and_duplicate_creates_none(self, assessment):
         first_response = self.confirm()
 
