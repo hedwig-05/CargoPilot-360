@@ -1,4 +1,3 @@
-
 from app.models.user import User
 from app.models.shipment import Shipment
 from app.models.shipment_event import ShipmentEvent
@@ -19,3 +18,4 @@ from app.models.audit_log import AuditLog
 from app.models.risk_configuration import RiskConfiguration
 from app.models.risk_factor_rule import RiskFactorRule
 from app.models.resolution_verification import ResolutionVerification
+from app.models.supervisor_workflow_link import SupervisorWorkflowLink
