@@ -111,6 +111,27 @@ def assess_milestone_reconciliation(
             "required_validation_count": REQUIRED_VALIDATION_COUNT
         }
 
+    latest_upload_time = max(
+        invoice.upload_date,
+        bill_of_lading.upload_date
+    )
+
+    stale_validations = [
+        item.validation_id
+        for item in validations
+        if item.validated_at is None
+        or item.validated_at < latest_upload_time
+    ]
+
+    if stale_validations:
+        return {
+            "event_id": event.event_id,
+            "event_status": event.event_status,
+            "ready_for_confirmation": False,
+            "reason": "Validation records predate the latest uploaded document version.",
+            "stale_validation_ids": stale_validations
+        }
+
     non_matching = [
         {
             "validation_id": item.validation_id,
