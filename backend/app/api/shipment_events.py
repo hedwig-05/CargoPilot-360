@@ -59,7 +59,7 @@ def get_event_reconciliation(
     shipment_id: int,
     event_id: int,
     db: Session = Depends(get_db),
-    current_user: User = Depends(require_roles("ADMIN", "MANAGER"))
+    current_user: User = Depends(get_current_user)
 ):
     event = db.query(ShipmentEvent).filter(
         ShipmentEvent.event_id == event_id,
@@ -91,8 +91,9 @@ class MilestoneConfirmationRequest(BaseModel):
 # CONFIRM OPERATIONAL MILESTONE
 # ==========================================
 
-@router.post("/events/{event_id}/confirm")
+@router.post("/{shipment_id}/events/{event_id}/confirm")
 def confirm_shipment_event(
+    shipment_id: int,
     event_id: int,
     request: MilestoneConfirmationRequest,
     db: Session = Depends(get_db),
@@ -101,7 +102,8 @@ def confirm_shipment_event(
     )
 ):
     event = db.query(ShipmentEvent).filter(
-        ShipmentEvent.event_id == event_id
+        ShipmentEvent.event_id == event_id,
+        ShipmentEvent.shipment_id == shipment_id
     ).with_for_update().first()
 
     if not event:
