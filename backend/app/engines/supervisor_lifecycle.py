@@ -154,6 +154,28 @@ def refresh_supervisor_workflow_status(
 
     if supervisor_run:
         output = dict(supervisor_run.output_data or {})
+
+        action_outcomes = output.get("action_outcomes") or []
+        has_unverified_resolution = any(
+            not outcome.get("resolution_verified", False)
+            for outcome in action_outcomes
+        )
+
+        if (
+            supervisor.status == "COMPLETED"
+            and has_unverified_resolution
+        ):
+            supervisor.current_node = (
+                "SUPERVISOR_COMPLETED_WITH_UNVERIFIED_RESOLUTIONS"
+            )
+
+        output["supervisor_completion_quality"] = (
+            "COMPLETED_WITH_UNVERIFIED_RESOLUTIONS"
+            if supervisor.status == "COMPLETED" and has_unverified_resolution
+            else "COMPLETED"
+            if supervisor.status == "COMPLETED"
+            else supervisor.status
+        )
         output["exception_workflow_summary"] = summaries
         output["exception_workflows_total"] = len(summaries)
         output["exception_workflows_terminal"] = sum(
