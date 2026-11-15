@@ -66,7 +66,7 @@ class MilestoneConfirmationAuthorizationTests(unittest.TestCase):
 
     def confirm(self):
         return self.client.post(
-            "/api/shipments/events/11/confirm",
+            "/api/shipments/4/events/11/confirm",
             json={
                 "actual_time": "2026-11-12T18:00:00",
                 "evidence_note": "Test confirmation authorization check.",
