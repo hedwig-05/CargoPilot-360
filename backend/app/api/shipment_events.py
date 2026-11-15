@@ -7,7 +7,7 @@ from sqlalchemy.orm import Session
 from app.database.connection import get_db
 from app.models import ShipmentEvent, AuditLog
 from app.models.user import User
-from app.auth.dependencies import require_roles
+from app.auth.dependencies import get_current_user, require_roles
 from app.engines.milestone_reconciliation import assess_milestone_reconciliation
 
 
