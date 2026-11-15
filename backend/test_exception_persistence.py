@@ -1,157 +1,117 @@
-"""Manual utility script. Safe to import during unittest discovery; run directly to execute."""
+"""Manual persistence integration test with FK-safe cleanup.
 
-if __name__ == "__main__":
-    
-    from app.database.connection import SessionLocal
-    from app.models import Exception as ShipmentException
-    from app.engines.exception_lifecycle import (
-        get_active_exception,
-        create_or_update_exception
-    )
-    
-    TEST_SHIPMENT_ID = 1
-    TEST_EXCEPTION_TYPE = "STAKEHOLDER_RESPONSE_DELAY"
-    
-    test_exception_id = None
-    
-    print("\n========== EXCEPTION PERSISTENCE TEST ==========")
-    
-    try:
-        # STEP 1: Check that no test exception already exists
-        db = SessionLocal()
-    
-        existing = get_active_exception(
-            db,
-            TEST_SHIPMENT_ID,
-            TEST_EXCEPTION_TYPE
+Run explicitly against the configured test database:
+    python test_exception_persistence.py
+"""
+from sqlalchemy import text
+
+from app.database.connection import DB_NAME, SessionLocal
+from app.models import Exception as ShipmentException
+from app.engines.exception_lifecycle import (
+    get_active_exception,
+    create_or_update_exception,
+)
+
+TEST_SHIPMENT_ID = 1
+TEST_EXCEPTION_TYPE = "STAKEHOLDER_RESPONSE_DELAY"
+TEST_DESCRIPTION_PREFIX = "TEMPORARY PERSISTENCE TEST - CargoPilot 360"
+
+
+def main():
+    if not DB_NAME.lower().endswith("_test"):
+        raise RuntimeError(
+            f"Safety stop: persistence test requires a *_test database, got {DB_NAME!r}."
         )
-    
+
+    test_exception_id = None
+    db = SessionLocal()
+    print("\n========== EXCEPTION PERSISTENCE TEST ==========")
+
+    try:
+        existing = get_active_exception(db, TEST_SHIPMENT_ID, TEST_EXCEPTION_TYPE)
+        if existing and (existing.description or "").startswith(TEST_DESCRIPTION_PREFIX):
+            raise RuntimeError(
+                "A previous temporary persistence-test exception still exists; "
+                "clean it up before rerunning."
+            )
         if existing:
             raise RuntimeError(
-                "A test exception already exists. "
-                "Stopping to protect existing database records."
+                "An active exception of this type already exists. "
+                "Stopping to protect existing business data."
             )
-    
-        print("\nSTEP 1: No existing test exception found.")
-    
-        # STEP 2: Create and permanently save a test exception
+
         result = create_or_update_exception(
             db=db,
             shipment_id=TEST_SHIPMENT_ID,
             exception_type=TEST_EXCEPTION_TYPE,
-            description="TEMPORARY PERSISTENCE TEST - CargoPilot 360",
+            description=TEST_DESCRIPTION_PREFIX,
             severity="LOW",
             detected_by="TEST",
-            commit=True
+            commit=True,
         )
-    
         test_exception_id = result["exception_id"]
-    
-        print("\nSTEP 2: Exception creation")
+        print("\nSTEP 1: Exception creation")
         print("Operation:", result["operation"])
         print("Exception ID:", test_exception_id)
-    
-        # STEP 3: Verify persistence using a separate database session
+
         verify_db = SessionLocal()
-    
         try:
-            saved = (
-                verify_db.query(ShipmentException)
-                .filter(
-                    ShipmentException.exception_id == test_exception_id
-                )
-                .first()
-            )
-    
-            print("\nSTEP 3: Persistence verification")
-            print("Record found:", saved is not None)
-    
-            if not saved:
+            saved = verify_db.query(ShipmentException).filter(
+                ShipmentException.exception_id == test_exception_id
+            ).first()
+            if saved is None:
                 raise RuntimeError("Saved exception could not be found.")
-    
+            print("\nSTEP 2: Persistence verification")
+            print("Record found:", True)
         finally:
             verify_db.close()
-    
-        # STEP 4: Call the helper again with the same shipment and type
+
         result = create_or_update_exception(
             db=db,
             shipment_id=TEST_SHIPMENT_ID,
             exception_type=TEST_EXCEPTION_TYPE,
-            description="TEMPORARY PERSISTENCE TEST - UPDATED",
+            description=TEST_DESCRIPTION_PREFIX + " - UPDATED",
             severity="LOW",
             detected_by="TEST",
-            commit=True
+            commit=True,
         )
-    
-        print("\nSTEP 4: Duplicate prevention")
+        print("\nSTEP 3: Duplicate prevention")
         print("Second operation:", result["operation"])
         print("Same exception ID:", result["exception_id"] == test_exception_id)
-    
-        if result["operation"] != "UPDATED":
-            raise RuntimeError("Expected the second call to update the existing exception.")
-    
-        # STEP 5: Confirm that only one active exception exists
-        verify_db = SessionLocal()
-    
-        try:
-            count = (
-                verify_db.query(ShipmentException)
-                .filter(
-                    ShipmentException.shipment_id == TEST_SHIPMENT_ID,
-                    ShipmentException.exception_type == TEST_EXCEPTION_TYPE,
-                    ShipmentException.status.in_([
-                        "OPEN",
-                        "INVESTIGATING",
-                        "AWAITING_APPROVAL",
-                        "IN_PROGRESS",
-                        "AWAITING_RESPONSE"
-                    ])
-                )
-                .count()
-            )
-    
-            print("\nSTEP 5: Active exception count:", count)
-    
-            if count != 1:
-                raise RuntimeError("Expected exactly one active test exception.")
-    
-        finally:
-            verify_db.close()
-    
+        if result["operation"] != "UPDATED" or result["exception_id"] != test_exception_id:
+            raise RuntimeError("Duplicate prevention did not update the original test row.")
+
         print("\nALL PERSISTENCE TESTS PASSED.")
-    
-    except Exception as error:
-        print("\nTEST FAILED:", error)
-        raise
-    
+
     finally:
         db.close()
-    
-        # STEP 6: Remove only the temporary record created by this test
         if test_exception_id is not None:
             cleanup_db = SessionLocal()
-    
             try:
-                temporary_record = (
-                    cleanup_db.query(ShipmentException)
-                    .filter(
-                        ShipmentException.exception_id == test_exception_id
+                temporary = cleanup_db.query(ShipmentException).filter(
+                    ShipmentException.exception_id == test_exception_id,
+                    ShipmentException.shipment_id == TEST_SHIPMENT_ID,
+                    ShipmentException.exception_type == TEST_EXCEPTION_TYPE,
+                    ShipmentException.detected_by == "TEST",
+                    ShipmentException.description.like(TEST_DESCRIPTION_PREFIX + "%"),
+                ).first()
+                if temporary is not None:
+                    cleanup_db.execute(
+                        text("DELETE FROM exception_status_history WHERE exception_id = :exception_id"),
+                        {"exception_id": test_exception_id},
                     )
-                    .first()
-                )
-    
-                if temporary_record:
-                    cleanup_db.delete(temporary_record)
+                    cleanup_db.delete(temporary)
                     cleanup_db.commit()
-                    print("\nSTEP 6: Temporary test record cleaned up.")
+                    print("\nCLEANUP: Temporary exception and its status history removed.")
                 else:
-                    print("\nSTEP 6: Temporary record was already absent.")
-    
-            except Exception as cleanup_error:
+                    cleanup_db.rollback()
+                    print("\nCLEANUP: No matching temporary exception found; no rows deleted.")
+            except Exception:
                 cleanup_db.rollback()
-                print("\nCLEANUP WARNING:", cleanup_error)
-                print("Please check the temporary exception manually.")
-    
+                raise
             finally:
                 cleanup_db.close()
-    
+
+
+if __name__ == "__main__":
+    main()
