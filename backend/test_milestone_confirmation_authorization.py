@@ -112,7 +112,8 @@ class MilestoneConfirmationAuthorizationTests(unittest.TestCase):
 
         self.assertEqual(response.status_code, 409)
         self.assertEqual(response.json()["detail"], "This milestone is already completed.")
-        self.assertEqual(self.db.query_count, 1)
+        self.assertEqual(self.db.query_count, 2)
+        self.assertEqual(self.db.locked_models, [Shipment, ShipmentEvent])
 
     def test_unauthenticated_request_is_rejected(self):
         self.client.app.dependency_overrides.pop(get_current_user)
