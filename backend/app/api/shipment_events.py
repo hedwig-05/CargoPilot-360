@@ -1,5 +1,5 @@
 
-from datetime import datetime
+from datetime import datetime, timezone
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
@@ -58,7 +58,8 @@ def get_shipment_events(
 def get_event_reconciliation(
     shipment_id: int,
     event_id: int,
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_roles("ADMIN", "MANAGER"))
 ):
     event = db.query(ShipmentEvent).filter(
         ShipmentEvent.event_id == event_id,
@@ -121,7 +122,14 @@ def confirm_shipment_event(
             detail="This milestone is already completed."
         )
 
-    if request.actual_time > datetime.now():
+    # Store naive UTC consistently because shipment_events.actual_time is a
+    # MySQL DATETIME column. Treat offset-free API values as UTC as well.
+    actual_time_utc = request.actual_time
+    if actual_time_utc.tzinfo is not None:
+        actual_time_utc = actual_time_utc.astimezone(timezone.utc).replace(tzinfo=None)
+
+    now_utc = datetime.now(timezone.utc).replace(tzinfo=None)
+    if actual_time_utc > now_utc:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Actual milestone time cannot be in the future."
@@ -144,9 +152,9 @@ def confirm_shipment_event(
     previous_status = event.event_status
     previous_actual_time = event.actual_time
 
-    event.actual_time = request.actual_time
+    event.actual_time = actual_time_utc
     event.event_status = "COMPLETED"
-    event.source = "USER_CONFIRMED"
+    # Keep source unchanged: it participates in simulator event deduplication.
 
     db.add(AuditLog(
         actor_type="USER",
@@ -164,7 +172,7 @@ def confirm_shipment_event(
                 previous_actual_time.isoformat()
                 if previous_actual_time else None
             ),
-            "actual_time": request.actual_time.isoformat(),
+            "actual_time": actual_time_utc.isoformat(),
             "evidence_note": request.evidence_note
         }
     ))
