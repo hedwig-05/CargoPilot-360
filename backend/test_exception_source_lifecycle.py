@@ -144,9 +144,6 @@ class StructuredExceptionSourceTests(unittest.TestCase):
         )
 
 
-if __name__ == "__main__":
-    unittest.main(verbosity=2)
-
 
 # Database-backed transition regression. These tests are deliberately skipped
 # unless the process is configured to use the disposable *_test database.
@@ -232,3 +229,7 @@ class DeferredSeverityDatabaseTests(unittest.TestCase):
         self.assertEqual(exception.severity, "LOW")
         self.assertFalse(exception.severity_recalculation_pending)
 
+
+
+if __name__ == "__main__":
+    unittest.main(verbosity=2)
