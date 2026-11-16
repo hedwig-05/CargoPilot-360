@@ -152,12 +152,25 @@ def _sla_metrics(exception, db):
 
 
 def _serialize_exception(exception, db):
+    sources = exception.sources if isinstance(exception.sources, dict) else None
+    has_active_source = (
+        any(source.get("active", True) for source in sources.values())
+        if sources is not None else True
+    )
+    severity_is_current = (
+        not exception.severity_recalculation_pending
+        and has_active_source
+    )
     return {
         "exception_id": exception.exception_id,
         "shipment_id": exception.shipment_id,
         "exception_type": exception.exception_type,
         "description": exception.description,
         "severity": exception.severity,
+        "severity_is_current": severity_is_current,
+        "severity_recalculation_pending": exception.severity_recalculation_pending,
+        "eligible_for_verification": exception.eligible_for_verification,
+        "sources": sources,
         "status": exception.status,
         "detected_at": exception.detected_at,
         "acknowledged_at": exception.acknowledged_at,
