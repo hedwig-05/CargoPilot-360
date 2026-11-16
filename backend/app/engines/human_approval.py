@@ -311,13 +311,6 @@ def reject_action(
             current_time=current_time,
         )
 
-        # Refresh every shipment-level Supervisor tracking this action.
-        refresh_supervisors_for_action(
-            db=db,
-            action_id=action.action_id,
-            current_time=current_time,
-        )
-
         # Create audit record
         create_approval_audit_log(
             db=db,
