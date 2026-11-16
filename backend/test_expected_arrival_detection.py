@@ -82,7 +82,6 @@ class ExpectedArrivalDetectionTests(unittest.TestCase):
         self.assertEqual(kwargs["source_evidence"]["shipment_status"], "ON_HOLD")
         self.assertTrue(kwargs["source_evidence"]["on_hold"])
         self.assertEqual(kwargs["severity"], "HIGH")
-        db.flush.assert_not_called() if hasattr(db, "assert_not_called") else None
         self.assertEqual(db.flushes, 1)
 
     @patch("app.engines.exception_detection.create_or_update_exception")
