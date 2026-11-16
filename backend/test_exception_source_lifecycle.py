@@ -261,11 +261,15 @@ class DuplicateInsertDB:
     """Simulate the unique-open_key loser after another transaction wins."""
     def __init__(self, winner):
         self.winner = winner
+        self.query_calls = 0
         self.flush_calls = 0
         self.added = []
 
     def query(self, model):
-        return FakeQuery(self.winner)
+        self.query_calls += 1
+        # The initial lookup finds no row; the post-IntegrityError lookup
+        # finds the concurrent transaction's winning row.
+        return FakeQuery(None if self.query_calls == 1 else self.winner)
 
     def begin_nested(self):
         return FakeNestedTransaction()
