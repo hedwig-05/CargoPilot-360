@@ -1,5 +1,6 @@
+from fastapi import Depends, FastAPI
 
-from fastapi import FastAPI
+from app.auth.dependencies import get_current_user
 
 # Existing API routers
 from app.api.shipments import router as shipments_router
@@ -31,27 +32,86 @@ app = FastAPI(
 )
 
 
-# Register existing routers
-app.include_router(shipments_router)
-app.include_router(shipment_events_router)
-app.include_router(documents_router)
-app.include_router(document_validations_router)
-app.include_router(exceptions_router)
-app.include_router(agent_workflows_router)
-app.include_router(agent_runs_router)
-app.include_router(auth_router)
-app.include_router(risk_configurations_router)
-app.include_router(monitoring.router)
-app.include_router(supervisor_router)
-app.include_router(resolution_verifications_router)
+# Require a valid login for every operational API router.
+# The authentication router remains public so users can log in.
+# Existing role-based dependencies on sensitive write operations
+# continue to enforce their more restrictive permissions.
+authenticated_router_dependencies = [
+    Depends(get_current_user)
+]
 
-# Register new routers
-app.include_router(investigations_router)
-app.include_router(risk_assessments_router)
-app.include_router(resolution_plans_router)
-app.include_router(actions_router)
-app.include_router(audit_logs_router)
-app.include_router(dashboard_router)
+# Register existing API routers
+app.include_router(
+    shipments_router,
+    dependencies=authenticated_router_dependencies
+)
+app.include_router(
+    shipment_events_router,
+    dependencies=authenticated_router_dependencies
+)
+app.include_router(
+    documents_router,
+    dependencies=authenticated_router_dependencies
+)
+app.include_router(
+    document_validations_router,
+    dependencies=authenticated_router_dependencies
+)
+app.include_router(
+    exceptions_router,
+    dependencies=authenticated_router_dependencies
+)
+app.include_router(
+    agent_workflows_router,
+    dependencies=authenticated_router_dependencies
+)
+app.include_router(
+    agent_runs_router,
+    dependencies=authenticated_router_dependencies
+)
+app.include_router(auth_router)
+app.include_router(
+    risk_configurations_router,
+    dependencies=authenticated_router_dependencies
+)
+app.include_router(
+    monitoring.router,
+    dependencies=authenticated_router_dependencies
+)
+app.include_router(
+    supervisor_router,
+    dependencies=authenticated_router_dependencies
+)
+app.include_router(
+    resolution_verifications_router,
+    dependencies=authenticated_router_dependencies
+)
+
+# Register additional API routers
+app.include_router(
+    investigations_router,
+    dependencies=authenticated_router_dependencies
+)
+app.include_router(
+    risk_assessments_router,
+    dependencies=authenticated_router_dependencies
+)
+app.include_router(
+    resolution_plans_router,
+    dependencies=authenticated_router_dependencies
+)
+app.include_router(
+    actions_router,
+    dependencies=authenticated_router_dependencies
+)
+app.include_router(
+    audit_logs_router,
+    dependencies=authenticated_router_dependencies
+)
+app.include_router(
+    dashboard_router,
+    dependencies=authenticated_router_dependencies
+)
 
 
 @app.get("/")
