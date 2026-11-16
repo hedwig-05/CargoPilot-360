@@ -1,4 +1,3 @@
-
 from sqlalchemy import (
     Column,
     Integer,
@@ -7,7 +6,9 @@ from sqlalchemy import (
     DateTime,
     Text,
     ForeignKey,
-    Computed
+    Computed,
+    JSON,
+    Boolean,
 )
 from sqlalchemy.sql import func
 
@@ -41,6 +42,16 @@ class Exception(Base):
     )
 
     description = Column(Text, nullable=False)
+
+    # Source-owned evidence is authoritative; description remains a
+    # compatibility projection until the verification reader is migrated.
+    sources = Column(JSON, nullable=True)
+    eligible_for_verification = Column(
+        Boolean, nullable=False, default=False, server_default="0"
+    )
+    severity_recalculation_pending = Column(
+        Boolean, nullable=False, default=False, server_default="0"
+    )
 
     severity = Column(
         Enum("LOW", "MEDIUM", "HIGH", "CRITICAL"),
@@ -104,11 +115,11 @@ class Exception(Base):
     resolution_notes = Column(Text, nullable=True)
 
     open_key = Column(
-    String(120),
-    Computed(
-        "CASE WHEN status IN ('RESOLVED', 'CLOSED') "
-        "THEN NULL "
-        "ELSE CONCAT(shipment_id, ':', exception_type) END",
-        persisted=True
+        String(120),
+        Computed(
+            "CASE WHEN status IN ('RESOLVED', 'CLOSED') "
+            "THEN NULL "
+            "ELSE CONCAT(shipment_id, ':', exception_type) END",
+            persisted=True
+        )
     )
-)
