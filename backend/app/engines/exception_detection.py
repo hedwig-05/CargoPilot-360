@@ -14,6 +14,7 @@ from app.models import (
 from app.engines.exception_lifecycle import (
     create_or_update_exception,
     EXPECTED_ARRIVAL,
+    OVERDUE_MILESTONE,
 )
 
 
@@ -111,7 +112,24 @@ def detect_shipment_delays(
                 severity="HIGH",
                 event_id=event_id,
                 detected_by="MONITORING_AGENT",
-                commit=False
+                commit=False,
+                source_key=OVERDUE_MILESTONE,
+                source_evidence={
+                    "event_ids": [event.event_id for event in events],
+                    "events": [
+                        {
+                            "event_id": event.event_id,
+                            "event_type": event.event_type,
+                            "expected_time": (
+                                event.expected_time.isoformat()
+                                if event.expected_time else None
+                            ),
+                            "event_status": event.event_status,
+                        }
+                        for event in events
+                    ],
+                },
+                source_active=True,
             )
 
             operation = result["operation"]
@@ -124,6 +142,55 @@ def detect_shipment_delays(
 
             elif operation == "SKIPPED":
                 skipped_count += 1
+
+        # Reconcile previously active milestone sources that no longer
+        # have any overdue events. Do not create exceptions during clearing.
+        shipment_query = db.query(Shipment)
+        if shipment_id is not None:
+            shipment_query = shipment_query.filter(
+                Shipment.shipment_id == shipment_id
+            )
+        monitored_shipments = shipment_query.all()
+
+        for shipment in monitored_shipments:
+            if events_by_shipment.get(shipment.shipment_id):
+                continue
+            existing = (
+                db.query(ShipmentException)
+                .filter(
+                    ShipmentException.shipment_id == shipment.shipment_id,
+                    ShipmentException.exception_type == "SHIPMENT_DELAY",
+                    ShipmentException.status.in_([
+                        "OPEN", "INVESTIGATING", "AWAITING_APPROVAL",
+                        "IN_PROGRESS", "AWAITING_RESPONSE", "PENDING_3RD_PARTY",
+                    ]),
+                )
+                .with_for_update()
+                .first()
+            )
+            sources = existing.sources if existing and isinstance(existing.sources, dict) else {}
+            source = sources.get(OVERDUE_MILESTONE)
+            if not isinstance(source, dict) or not source.get("active", False):
+                continue
+
+            result = create_or_update_exception(
+                db=db,
+                shipment_id=shipment.shipment_id,
+                exception_type="SHIPMENT_DELAY",
+                description=existing.description or "Shipment delay.",
+                severity=source.get("severity", "HIGH"),
+                detected_by="MONITORING_AGENT",
+                commit=False,
+                source_key=OVERDUE_MILESTONE,
+                source_evidence={
+                    "event_ids": [],
+                    "events": [],
+                    "cleared_reason": "NO_OVERDUE_MILESTONES",
+                },
+                source_active=False,
+            )
+            if result["operation"] == "UPDATED":
+                updated_count += 1
 
         if commit:
             db.commit()
