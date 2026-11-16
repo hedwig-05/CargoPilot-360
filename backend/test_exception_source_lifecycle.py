@@ -231,5 +231,93 @@ class DeferredSeverityDatabaseTests(unittest.TestCase):
 
 
 
+class FakeQuery:
+    def __init__(self, result):
+        self.result = result
+
+    def filter(self, *args, **kwargs):
+        return self
+
+    def with_for_update(self):
+        return self
+
+    def first(self):
+        return self.result
+
+
+class FakeNestedTransaction:
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc, traceback):
+        return False
+
+
+class DuplicateInsertDB:
+    """Simulate the unique-open_key loser after another transaction wins."""
+    def __init__(self, winner):
+        self.winner = winner
+        self.flush_calls = 0
+        self.added = []
+
+    def query(self, model):
+        return FakeQuery(self.winner)
+
+    def begin_nested(self):
+        return FakeNestedTransaction()
+
+    def add(self, item):
+        self.added.append(item)
+
+    def flush(self):
+        self.flush_calls += 1
+        if self.flush_calls == 1:
+            from sqlalchemy.exc import IntegrityError
+            raise IntegrityError("INSERT exceptions", {}, Exception("duplicate open_key"))
+
+
+class ConcurrentCreateRecoveryTests(unittest.TestCase):
+    def test_losing_writer_merges_source_into_winning_exception(self):
+        from app.engines.exception_lifecycle import create_or_update_exception
+
+        winner = make_exception(
+            status="OPEN",
+            severity="MEDIUM",
+            sources={
+                "WINNER_SOURCE": {
+                    "evidence": {"winner": True},
+                    "severity": "MEDIUM",
+                    "active": True,
+                }
+            },
+        )
+        winner.exception_type = "SHIPMENT_DELAY"
+        winner.description = "Winner exception"
+        winner.event_id = None
+        winner.document_id = None
+        db = DuplicateInsertDB(winner)
+
+        result = create_or_update_exception(
+            db=db,
+            shipment_id=winner.shipment_id,
+            exception_type="SHIPMENT_DELAY",
+            description="Losing writer description",
+            severity="HIGH",
+            detected_by="UNIT_TEST",
+            commit=False,
+            source_key=OVERDUE_MILESTONE,
+            source_evidence={"events": [{"event_id": 444, "event_type": "VESSEL_ARRIVED"}]},
+            source_active=True,
+        )
+
+        self.assertEqual(result["operation"], "UPDATED")
+        self.assertEqual(result["exception_id"], winner.exception_id)
+        self.assertTrue(winner.sources["WINNER_SOURCE"]["evidence"]["winner"])
+        self.assertEqual(
+            winner.sources[OVERDUE_MILESTONE]["evidence"]["events"][0]["event_id"],
+            444,
+        )
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
