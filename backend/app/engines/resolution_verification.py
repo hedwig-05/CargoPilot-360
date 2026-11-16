@@ -656,7 +656,7 @@ def verify_shipment_delay(
     if not affected_events and not expected_source:
         description = exception.description or ""
         event_matches = re.findall(
-            r"([A-Z_]+)\\s+\\(Event ID:\\s*(\\d+)",
+            r"([A-Z_]+)\s+\(Event ID:\s*(\d+)",
             description
         )
         for event_type, event_id in event_matches:
