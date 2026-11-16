@@ -24,6 +24,10 @@ def make_exception(status="OPEN", severity="HIGH", sources=None):
         description="Legacy test exception description.",
         event_id=None,
         document_id=None,
+        exception_type="SHIPMENT_DELAY",
+        description="Legacy test exception description.",
+        event_id=None,
+        document_id=None,
         status=status,
         severity=severity,
         sources=deepcopy(sources),
@@ -272,6 +276,9 @@ class DuplicateInsertDB:
 
     def add(self, item):
         self.added.append(item)
+
+    def rollback(self):
+        pass
 
     def flush(self):
         self.flush_calls += 1
