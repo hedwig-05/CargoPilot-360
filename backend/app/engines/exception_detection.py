@@ -228,9 +228,7 @@ def detect_expected_arrival_delays(
     evidence only; it never resolves the exception.
     """
     current_time = datetime.now()
-    query = db.query(Shipment).filter(
-        Shipment.status.notin_(["DELIVERED", "CANCELLED"])
-    )
+    query = db.query(Shipment)
     if shipment_id is not None:
         query = query.filter(Shipment.shipment_id == shipment_id)
 
@@ -243,7 +241,8 @@ def detect_expected_arrival_delays(
     try:
         for shipment in shipments:
             overdue = (
-                shipment.actual_arrival is None
+                shipment.status not in ("DELIVERED", "CANCELLED")
+                and shipment.actual_arrival is None
                 and shipment.expected_arrival is not None
                 and shipment.expected_arrival < current_time
             )
@@ -258,7 +257,6 @@ def detect_expected_arrival_delays(
                 ),
                 "shipment_status": shipment.status,
                 "on_hold": shipment.status == "ON_HOLD",
-                "observed_at": current_time.isoformat(),
             }
 
             if overdue:
