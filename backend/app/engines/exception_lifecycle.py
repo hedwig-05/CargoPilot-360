@@ -224,6 +224,8 @@ def _merge_source_evidence(db, exception, source_key, evidence, severity,
                 exception.severity_recalculation_pending = False
             elif SEVERITY_RANK.get(target_severity, 0) < SEVERITY_RANK.get(old_severity, 0):
                 exception.severity_recalculation_pending = True
+            else:
+                exception.severity_recalculation_pending = False
         else:
             exception.severity = target_severity
             exception.severity_recalculation_pending = False
@@ -336,9 +338,9 @@ def create_or_update_exception(
 ):
     """Create/update an exception, optionally merging one structured source.
 
-    Legacy callers retain their existing description format. For source-aware
-    callers, description remains unchanged until verification reads structured
-    evidence, avoiding a regex compatibility break.
+    Legacy callers retain their existing behavior. Source-aware SHIPMENT_DELAY
+    descriptions are generated from active structured sources; verification
+    reads the same structured evidence and retains a legacy regex fallback.
     """
     try:
         existing = (
