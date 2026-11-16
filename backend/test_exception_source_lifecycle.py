@@ -20,6 +20,10 @@ def make_exception(status="OPEN", severity="HIGH", sources=None):
     return SimpleNamespace(
         exception_id=10,
         shipment_id=20,
+        exception_type="SHIPMENT_DELAY",
+        description="Legacy test exception description.",
+        event_id=None,
+        document_id=None,
         status=status,
         severity=severity,
         sources=deepcopy(sources),
