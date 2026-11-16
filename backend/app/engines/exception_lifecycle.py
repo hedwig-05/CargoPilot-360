@@ -1,5 +1,6 @@
 from copy import deepcopy
 from datetime import datetime
+import re
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -23,6 +24,7 @@ ALL_EXCEPTION_STATUSES = ACTIVE_EXCEPTION_STATUSES + ["RESOLVED", "CLOSED"]
 # Keep source identifiers centralized. Add new monitoring sources here.
 OVERDUE_MILESTONE = "OVERDUE_MILESTONE"
 EXPECTED_ARRIVAL = "EXPECTED_ARRIVAL"
+LEGACY_UNCLASSIFIED = "LEGACY_UNCLASSIFIED"
 SEVERITY_RANK = {"LOW": 1, "MEDIUM": 2, "HIGH": 3, "CRITICAL": 4}
 
 
@@ -65,6 +67,85 @@ def _max_active_source_severity(sources):
     return max(active, key=lambda value: SEVERITY_RANK.get(value, 0), default=None)
 
 
+def _initial_source_map(exception):
+    """Preserve source-less legacy evidence before the first structured update."""
+    if isinstance(exception.sources, dict):
+        return deepcopy(exception.sources)
+
+    sources = {}
+    if exception.exception_type == "SHIPMENT_DELAY":
+        matches = re.findall(
+            r"([A-Z_]+)\s+\(Event ID:\s*(\d+)",
+            exception.description or "",
+        )
+        events = [
+            {"event_type": event_type, "event_id": int(event_id)}
+            for event_type, event_id in matches
+        ]
+        if not events and exception.event_id:
+            events = [{"event_type": None, "event_id": exception.event_id}]
+        if events:
+            now = datetime.now().isoformat()
+            sources[OVERDUE_MILESTONE] = {
+                "evidence": {"events": events},
+                "severity": exception.severity,
+                "active": True,
+                "created_at": now,
+                "updated_at": now,
+                "cleared_at": None,
+            }
+
+    if not sources:
+        now = datetime.now().isoformat()
+        sources[LEGACY_UNCLASSIFIED] = {
+            "evidence": {"description": exception.description},
+            "severity": exception.severity,
+            "active": True,
+            "created_at": now,
+            "updated_at": now,
+            "cleared_at": None,
+        }
+    return sources
+
+
+def _render_source_description(sources):
+    """Render a stable human-readable projection without becoming source of truth."""
+    sections = []
+    for key, source in sources.items():
+        if not source.get("active", True):
+            continue
+        evidence = source.get("evidence") or {}
+        if key == OVERDUE_MILESTONE:
+            events = evidence.get("events", [])
+            if not events and evidence.get("event_ids"):
+                events = [{"event_id": event_id} for event_id in evidence["event_ids"]]
+            for event in events:
+                event_id = event.get("event_id")
+                event_type = event.get("event_type") or "SHIPMENT_EVENT"
+                expected = event.get("expected_time")
+                details = f"{event_type} (Event ID: {event_id}"
+                if expected:
+                    details += f", Expected: {expected}"
+                details += ")"
+                sections.append(details)
+            if not events:
+                sections.append("Overdue shipment milestone evidence is active.")
+        elif key == EXPECTED_ARRIVAL:
+            expected = evidence.get("expected_arrival")
+            status = evidence.get("shipment_status")
+            detail = "Expected shipment arrival is overdue"
+            if expected:
+                detail += f" (Expected: {expected})"
+            if status == "ON_HOLD":
+                detail += "; shipment is ON_HOLD"
+            sections.append(detail + ".")
+        else:
+            sections.append(str(evidence.get("description") or key.replace("_", " ").title()))
+    if not sections:
+        return "No active shipment-delay evidence sources remain; resolution verification is eligible."
+    return "Active shipment-delay evidence: " + "; ".join(sections)
+
+
 def _source_snapshot(source):
     return {
         "evidence": deepcopy(source.get("evidence")),
@@ -97,7 +178,7 @@ def _merge_source_evidence(db, exception, source_key, evidence, severity,
                            active, operator_id=None):
     """Merge one source without changing any other source's evidence."""
     now = datetime.now()
-    sources = deepcopy(exception.sources or {})
+    sources = _initial_source_map(exception)
     old_source = deepcopy(sources.get(source_key))
     old_snapshot = _source_snapshot(old_source) if old_source else None
 
@@ -126,6 +207,8 @@ def _merge_source_evidence(db, exception, source_key, evidence, severity,
         sources[source_key] = deepcopy(new_source)
         # Assign a fresh top-level and nested dictionary for SQLAlchemy JSON tracking.
         exception.sources = deepcopy(sources)
+        if exception.exception_type == "SHIPMENT_DELAY":
+            exception.description = _render_source_description(sources)
 
     eligible = bool(sources) and all(not item.get("active", True) for item in sources.values())
     if exception.eligible_for_verification != eligible:
