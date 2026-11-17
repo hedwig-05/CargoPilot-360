@@ -48,10 +48,10 @@ SUBTYPE_RULES = {
 # scores measure extracted-field coverage, not OCR confidence or truth.
 REQUIRED_FIELDS = {
     "INSPECTION_REPORT": ("shipment_ref", "document_date", "inspection_finding"),
-    "TALLY_REPORT": ("shipment_ref", "document_date", "received_quantity"),
+    "TALLY_REPORT": ("shipment_ref", "document_date", "expected_quantity", "received_quantity"),
     "DAMAGE_SURVEY": ("shipment_ref", "document_date", "damage_finding"),
     "DELIVERY_RECEIPT": ("shipment_ref", "document_date", "received_quantity"),
-    "SHORTAGE_REPORT": ("shipment_ref", "document_date", "received_quantity"),
+    "SHORTAGE_REPORT": ("shipment_ref", "document_date", "expected_quantity", "received_quantity"),
     "CLAIM_SETTLEMENT": ("shipment_ref", "document_date", "claim_status"),
     "CREDIT_NOTE": ("shipment_ref", "document_date", "credit_amount"),
 }
