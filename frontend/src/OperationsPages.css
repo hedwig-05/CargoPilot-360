@@ -1238,3 +1238,61 @@
     grid-column: auto;
   }
 }
+
+
+/* Resolution plan reasoning sections */
+
+.op-reasoning-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+  width: 100%;
+  margin-top: 6px;
+}
+
+.op-reasoning-card {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 8px;
+  min-width: 0;
+  padding: 14px;
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  background: var(--bg-primary);
+}
+
+.op-reasoning-card > span {
+  display: block;
+  width: 100%;
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+}
+
+.op-reasoning-card > strong {
+  display: block;
+  width: 100%;
+  color: var(--text-primary);
+  font-size: 13px;
+  font-weight: 500;
+  line-height: 1.7;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+
+.op-reasoning-wide {
+  grid-column: 1 / -1;
+}
+
+@media (max-width: 600px) {
+  .op-reasoning-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .op-reasoning-wide {
+    grid-column: auto;
+  }
+}

@@ -252,10 +252,17 @@ function formatDetailValue(key: string, value: any): string {
 }
 
 function findId(row: Row) {
-  return row.exception_id ?? row.investigation_id ??
-    row.assessment_id ?? row.risk_assessment_id ??
-    row.workflow_id ?? row.run_id ?? row.plan_id ??
-    row.action_id ?? row.audit_log_id ?? row.id ?? '—'
+  return row.plan_id ??
+    row.exception_id ??
+    row.investigation_id ??
+    row.assessment_id ??
+    row.risk_assessment_id ??
+    row.workflow_id ??
+    row.run_id ??
+    row.action_id ??
+    row.audit_log_id ??
+    row.id ??
+    '—'
 }
 
 function shipmentLabel(row: Row, shipments: ShipmentRef[]) {
@@ -429,8 +436,92 @@ function StructuredData({ data }: { data: any }) {
   )
 }
 
-function DetailValue({ value }: { value: any }) {
+
+
+function ReasoningDetails({ value }: { value: string }) {
+  const labels = [
+    'Exception type',
+    'Investigation recommendation',
+    'Investigation summary',
+    'Possible cause',
+    'Risk explanation',
+    'Risk level',
+    'Risk score',
+    'Description',
+    'Severity'
+  ]
+
+  const escapedLabels = labels.map(label =>
+    label.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+  )
+
+  const pattern = new RegExp(
+    `(${escapedLabels.join('|')}):\\s*`,
+    'gi'
+  )
+
+  const matches = Array.from(value.matchAll(pattern))
+
+  if (!matches.length) {
+    return <div className="op-detail-text">{value}</div>
+  }
+
+  const sections = matches.map((match, index) => {
+    const start = (match.index ?? 0) + match[0].length
+    const end = matches[index + 1]?.index ?? value.length
+
+    return {
+      label: match[1],
+      value: value.slice(start, end).trim()
+    }
+  })
+
+  return (
+    <div className="op-reasoning-grid">
+      {sections.map((section, index) => {
+        const wide =
+  /description|summary|recommendation|explanation|cause/i.test(section.label)
+
+        const status =
+          /severity|risk level/i.test(section.label)
+
+        return (
+          <div
+            className={`op-reasoning-card ${
+              wide ? 'op-reasoning-wide' : ''
+            }`}
+            key={`${section.label}-${index}`}
+          >
+            <span>{section.label}</span>
+
+            {status ? (
+              <StatusPill value={section.value} />
+            ) : (
+              <strong>{section.value}</strong>
+            )}
+          </div>
+        )
+      })}
+    </div>
+  )
+}
+
+
+function DetailValue({
+  value,
+  fieldKey
+}: {
+  value: any
+  fieldKey: string
+}) {
   const parsed = parseDetailValue(value)
+
+  if (
+    fieldKey.toLowerCase() === 'reasoning' &&
+    typeof parsed.data === 'string'
+  ) {
+    return <ReasoningDetails value={parsed.data} />
+  }
 
   if (!parsed.isStructured) {
     return (
@@ -452,6 +543,7 @@ function DetailValue({ value }: { value: any }) {
     </div>
   )
 }
+
 
 export default function OperationsPage({
   page,
@@ -1198,7 +1290,7 @@ export default function OperationsPage({
                         key={key}
                       >
                         <span>{humanize(key)}</span>
-                        <DetailValue value={value} />
+                        <DetailValue value={value} fieldKey={key} />
                       </div>
                     )
                   })}
