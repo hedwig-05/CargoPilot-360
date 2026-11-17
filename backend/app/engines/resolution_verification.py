@@ -18,7 +18,11 @@ from app.models import (
     AuditLog
 )
 
-from app.engines.exception_lifecycle import resolve_exception
+from app.engines.exception_lifecycle import (
+    resolve_exception,
+    OVERDUE_MILESTONE,
+    EXPECTED_ARRIVAL,
+)
 
 
 # ==========================================================
@@ -551,6 +555,77 @@ def verify_document_mismatch(
 
 
 # ==========================================================
+# HELPER: VERIFY EXPECTED ARRIVAL SOURCE
+# ==========================================================
+
+def verify_expected_arrival(shipment: Shipment):
+    """Verify current shipment facts; a cleared alert alone is not proof."""
+    expected = shipment.expected_arrival
+    actual = shipment.actual_arrival
+    status = shipment.status
+
+    if actual is not None:
+        return {
+            "status": "VERIFIED",
+            "summary": "The shipment has a recorded actual arrival timestamp.",
+            "validation_results": [{
+                "source": EXPECTED_ARRIVAL,
+                "result": "ACTUAL_ARRIVAL_RECORDED",
+                "actual_arrival": actual.isoformat(),
+                "shipment_status": status,
+            }],
+        }
+
+    if status in ("DELIVERED", "CANCELLED"):
+        return {
+            "status": "VERIFIED",
+            "summary": f"The shipment is in terminal status {status}.",
+            "validation_results": [{
+                "source": EXPECTED_ARRIVAL,
+                "result": "TERMINAL_SHIPMENT_STATUS",
+                "shipment_status": status,
+            }],
+        }
+
+    if expected is None:
+        return {
+            "status": "INCONCLUSIVE",
+            "summary": "The shipment has no expected-arrival timestamp to verify.",
+            "validation_results": [{
+                "source": EXPECTED_ARRIVAL,
+                "result": "MISSING_EXPECTED_ARRIVAL",
+            }],
+        }
+
+    if expected > datetime.now():
+        return {
+            "status": "VERIFIED",
+            "summary": "The shipment's revised expected-arrival time is in the future.",
+            "validation_results": [{
+                "source": EXPECTED_ARRIVAL,
+                "result": "ETA_REVISED_INTO_FUTURE",
+                "expected_arrival": expected.isoformat(),
+                "shipment_status": status,
+            }],
+        }
+
+    # ON_HOLD is deliberately not a resolution condition.
+    return {
+        "status": "NOT_VERIFIED",
+        "summary": (
+            "The expected arrival remains overdue and no actual arrival "
+            "or terminal shipment status has been recorded."
+        ),
+        "validation_results": [{
+            "source": EXPECTED_ARRIVAL,
+            "result": "OVERDUE_WITHOUT_ARRIVAL",
+            "expected_arrival": expected.isoformat(),
+            "shipment_status": status,
+        }],
+    }
+
+
+# ==========================================================
 # HELPER: VERIFY SHIPMENT DELAY
 # ==========================================================
 
@@ -559,75 +634,51 @@ def verify_shipment_delay(
     exception: ShipmentException,
     shipment: Shipment
 ):
-
-    """
-    Verify every overdue milestone associated
-    with the original SHIPMENT_DELAY exception.
-
-    VERIFIED:
-        Every affected milestone is completed
-        with an actual completion timestamp.
-
-    NOT_VERIFIED:
-        At least one affected milestone remains
-        overdue and incomplete.
-
-    INCONCLUSIVE:
-        Required event evidence is missing
-        or inconsistent.
-    """
-
-    # --------------------------------------------------
-    # 1. IDENTIFY ORIGINAL EVENT IDS
-    # --------------------------------------------------
-
-    description = exception.description or ""
-
-    event_matches = re.findall(
-        r"([A-Z_]+)\s+\(Event ID:\s*(\d+)",
-        description
-    )
+    """Verify all structured delay sources, with legacy description fallback."""
+    sources = exception.sources if isinstance(exception.sources, dict) else {}
+    structured_events = sources.get(OVERDUE_MILESTONE)
+    expected_source = sources.get(EXPECTED_ARRIVAL)
 
     affected_events = {}
+    if isinstance(structured_events, dict):
+        evidence = structured_events.get("evidence") or {}
+        for item in evidence.get("events", []):
+            if isinstance(item, dict) and item.get("event_id") is not None:
+                affected_events[int(item["event_id"])] = item.get("event_type")
+        for event_id in evidence.get("event_ids", []):
+            try:
+                affected_events.setdefault(int(event_id), None)
+            except (TypeError, ValueError):
+                continue
 
-    for event_type, event_id in event_matches:
+    # Backward compatibility: rows without structured milestone evidence
+    # continue using the original, byte-compatible description marker.
+    if not affected_events and not expected_source:
+        description = exception.description or ""
+        event_matches = re.findall(
+            r"([A-Z_]+)\s+\(Event ID:\s*(\d+)",
+            description
+        )
+        for event_type, event_id in event_matches:
+            affected_events[int(event_id)] = event_type
 
-        affected_events[int(event_id)] = event_type
-
-    # Fallback to directly associated event.
-
-    if not affected_events and exception.event_id:
-
+    if not affected_events and exception.event_id and not expected_source:
         affected_events[exception.event_id] = None
 
-    if not affected_events:
-
+    if not affected_events and not expected_source:
         return {
             "status": "INCONCLUSIVE",
-            "summary": (
-                "The original overdue milestone IDs "
-                "could not be identified."
-            ),
+            "summary": "The original overdue milestone IDs could not be identified.",
             "validation_results": [],
-            "missing_evidence": [
-                "ORIGINAL_OVERDUE_EVENT_IDS"
-            ]
+            "missing_evidence": ["ORIGINAL_OVERDUE_EVENT_IDS"],
         }
 
-    # --------------------------------------------------
-    # 2. RETRIEVE AND CHECK ORIGINAL EVENTS
-    # --------------------------------------------------
-
     results = []
-
     unresolved_events = []
-
     missing_evidence = []
-
     inconsistent_events = []
 
     for event_id, expected_event_type in affected_events.items():
-
         event = (
             db.query(ShipmentEvent)
             .filter(
@@ -637,81 +688,44 @@ def verify_shipment_delay(
             .first()
         )
 
-        # ----------------------------------------------
-        # EVENT NOT FOUND
-        # ----------------------------------------------
-
         if event is None:
-
             missing_evidence.append(event_id)
-
             results.append({
                 "event_id": event_id,
                 "expected_event_type": expected_event_type,
                 "result": "MISSING",
-                "explanation": (
-                    "The original overdue shipment event "
-                    "could not be found."
-                )
+                "explanation": "The original overdue shipment event could not be found.",
             })
-
             continue
 
-        # ----------------------------------------------
-        # CHECK EVENT TYPE
-        # ----------------------------------------------
-
-        if (
-            expected_event_type is not None
-            and event.event_type != expected_event_type
-        ):
-
+        if expected_event_type is not None and event.event_type != expected_event_type:
             inconsistent_events.append(event_id)
-
             results.append({
                 "event_id": event_id,
                 "event_type": event.event_type,
                 "result": "INCONSISTENT",
-                "explanation": (
-                    "The event type does not match "
-                    "the original exception description."
-                )
+                "explanation": "The event type does not match the original source evidence.",
             })
-
             continue
 
-        # ----------------------------------------------
-        # CHECK COMPLETION EVIDENCE
-        # ----------------------------------------------
-
-        if (
-            event.event_status == "COMPLETED"
-            and event.actual_time is not None
-        ):
-
+        if event.event_status == "COMPLETED" and event.actual_time is not None:
             results.append({
                 "event_id": event.event_id,
                 "event_type": event.event_type,
-                "expected_time": event.expected_time.isoformat(),
+                "expected_time": event.expected_time.isoformat() if event.expected_time else None,
                 "actual_time": event.actual_time.isoformat(),
                 "event_status": event.event_status,
                 "source": event.source,
                 "result": "COMPLETED",
-                "explanation": (
-                    "The original overdue milestone "
-                    "has been completed with an actual "
-                    "completion timestamp."
-                )
+                "explanation": "The original overdue milestone has an actual completion timestamp.",
             })
-
         elif (
             event.event_status in ["PENDING", "LATE"]
             and event.actual_time is None
+            and event.expected_time is not None
             and event.expected_time < datetime.now()
         ):
-
             unresolved_events.append(event.event_id)
-
             results.append({
                 "event_id": event.event_id,
                 "event_type": event.event_type,
@@ -719,75 +733,52 @@ def verify_shipment_delay(
                 "actual_time": None,
                 "event_status": event.event_status,
                 "result": "NOT_COMPLETED",
-                "explanation": (
-                    "The original milestone remains "
-                    "overdue without an actual completion time."
-                )
+                "explanation": "The original milestone remains overdue without actual completion.",
             })
-
         else:
-
             inconsistent_events.append(event.event_id)
-
             results.append({
                 "event_id": event.event_id,
                 "event_type": event.event_type,
-                "expected_time": event.expected_time.isoformat(),
-                "actual_time": (
-                    event.actual_time.isoformat()
-                    if event.actual_time
-                    else None
-                ),
+                "expected_time": event.expected_time.isoformat() if event.expected_time else None,
+                "actual_time": event.actual_time.isoformat() if event.actual_time else None,
                 "event_status": event.event_status,
                 "result": "INCONSISTENT",
-                "explanation": (
-                    "The milestone status and actual "
-                    "completion timestamp do not provide "
-                    "sufficient consistent evidence."
-                )
+                "explanation": "The milestone status and timestamp do not provide consistent evidence.",
             })
 
-    # --------------------------------------------------
-    # 3. DETERMINE FINAL VERIFICATION STATUS
-    # --------------------------------------------------
-
+    event_status = "VERIFIED"
+    event_summary = "All original overdue shipment milestones have been completed."
     if unresolved_events:
-
-        status = "NOT_VERIFIED"
-
-        summary = (
-            "One or more original shipment milestones "
-            "remain overdue and incomplete."
-        )
-
+        event_status = "NOT_VERIFIED"
+        event_summary = "One or more original shipment milestones remain overdue and incomplete."
     elif missing_evidence or inconsistent_events:
+        event_status = "INCONCLUSIVE"
+        event_summary = "Some original milestone evidence is missing or inconsistent."
 
-        status = "INCONCLUSIVE"
+    source_results = [event_status]
+    summaries = [event_summary]
+    if expected_source is not None:
+        expected_result = verify_expected_arrival(shipment)
+        source_results.append(expected_result["status"])
+        summaries.append(expected_result["summary"])
+        results.extend(expected_result["validation_results"])
 
-        summary = (
-            "The shipment delay could not be fully verified "
-            "because some original milestone evidence "
-            "is missing or inconsistent."
-        )
-
+    if "NOT_VERIFIED" in source_results:
+        final_status = "NOT_VERIFIED"
+    elif "INCONCLUSIVE" in source_results:
+        final_status = "INCONCLUSIVE"
     else:
-
-        status = "VERIFIED"
-
-        summary = (
-            "All original overdue shipment milestones "
-            "have been completed with actual completion "
-            "timestamps."
-        )
+        final_status = "VERIFIED"
 
     return {
-        "status": status,
-        "summary": summary,
+        "status": final_status,
+        "summary": " ".join(summaries),
         "validation_results": results,
         "unresolved_events": unresolved_events,
         "missing_evidence": missing_evidence,
         "inconsistent_events": inconsistent_events,
-        "total_events_checked": len(affected_events)
+        "total_events_checked": len(affected_events),
     }
 
 

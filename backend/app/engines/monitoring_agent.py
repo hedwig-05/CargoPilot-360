@@ -14,6 +14,7 @@ from app.models import (
 
 from app.engines.exception_detection import (
     detect_shipment_delays,
+    detect_expected_arrival_delays,
     detect_missing_documents
 )
 
@@ -52,9 +53,10 @@ def run_monitoring_cycle(
     1. Create an AgentWorkflow.
     2. Create a Monitoring AgentRun.
     3. Detect overdue shipment milestones.
-    4. Detect missing required documents.
-    5. Save detection results.
-    6. Complete or fail the workflow and run.
+    4. Detect overdue shipment-level expected arrivals.
+    5. Detect missing required documents.
+    6. Save detection results.
+    7. Complete or fail the workflow and run.
 
     Each shipment is processed independently.
     """
@@ -180,7 +182,17 @@ def run_monitoring_cycle(
             )
 
             # ----------------------------------------
-            # STEP 2D: DETECT MISSING DOCUMENTS
+            # STEP 2D: DETECT EXPECTED-ARRIVAL DELAYS
+            # ----------------------------------------
+
+            expected_arrival_result = detect_expected_arrival_delays(
+                db=db,
+                commit=False,
+                shipment_id=shipment_id
+            )
+
+            # ----------------------------------------
+            # STEP 2E: DETECT MISSING DOCUMENTS
             # ----------------------------------------
 
             document_result = detect_missing_documents(
@@ -190,7 +202,7 @@ def run_monitoring_cycle(
             )
 
             # ----------------------------------------
-            # STEP 2E: BUILD OUTPUT
+            # STEP 2F: BUILD OUTPUT
             # ----------------------------------------
 
             output_data = {
@@ -198,6 +210,7 @@ def run_monitoring_cycle(
                 "shipment_ref": shipment_ref,
                 "monitoring_results": {
                     "shipment_delay_detection": delay_result,
+                    "expected_arrival_detection": expected_arrival_result,
                     "missing_document_detection": document_result
                 },
                 "monitoring_completed_at": (
@@ -210,7 +223,7 @@ def run_monitoring_cycle(
             )
 
             # ----------------------------------------
-            # STEP 2F: COMPLETE WORKFLOW AND RUN
+            # STEP 2G: COMPLETE WORKFLOW AND RUN
             # ----------------------------------------
 
             workflow.status = "COMPLETED"
@@ -234,13 +247,14 @@ def run_monitoring_cycle(
                 "run_public_id": run_public_id,
                 "status": "COMPLETED",
                 "delay_detection": delay_result,
+                "expected_arrival_detection": expected_arrival_result,
                 "missing_document_detection": document_result
             })
 
         except Exception as error:
 
             # ----------------------------------------
-            # STEP 2G: HANDLE FAILURE
+            # STEP 2H: HANDLE FAILURE
             # ----------------------------------------
 
             db.rollback()

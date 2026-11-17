@@ -1,0 +1,137 @@
+
+@import url('https://fonts.googleapis.com/css2?family=Montserrat:wght@400;500;600;700;800&display=swap');
+
+@import "tailwindcss";
+
+/* BRAND COLOURS */
+
+:root {
+  font-family: 'Montserrat', 'Segoe UI', Arial, sans-serif;
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+
+  --brand-cyan: #1ed2f4;
+  --brand-lime: #eafc40;
+  --brand-blue: #254558;
+  --brand-charcoal: #2b2b3a;
+}
+
+/* LIGHT THEME */
+
+:root,
+[data-theme="light"] {
+  color-scheme: light;
+
+  --bg-primary: #f4f5f6;
+  --bg-secondary: #ffffff;
+  --bg-sidebar: #2b2b3a;
+  --bg-hover: #edf2f4;
+
+  --text-primary: #2b2b3a;
+  --text-secondary: #254558;
+  --text-muted: #7b8790;
+  --text-sidebar: #f4f5f6;
+
+  --border-color: #e1e6e9;
+
+  --warning-bg: #fff8eb;
+  --warning-border: #f0dfbd;
+
+  --shadow-card: 0 1px 4px rgba(37, 69, 88, 0.045);
+}
+
+/* DARK THEME */
+
+[data-theme="dark"] {
+  color-scheme: dark;
+
+  --bg-primary: #2b2b3a;
+  --bg-secondary: #254558;
+  --bg-sidebar: #20202c;
+  --bg-hover: #34576a;
+
+  --text-primary: #f4f5f6;
+  --text-secondary: #d0dce2;
+  --text-muted: #a5b3bc;
+  --text-sidebar: #f4f5f6;
+
+  --border-color: #3d5d6e;
+
+  --warning-bg: #4a4536;
+  --warning-border: #756343;
+
+  --shadow-card: 0 1px 4px rgba(0, 0, 0, 0.08);
+}
+
+/* GLOBAL RESET */
+
+* {
+  box-sizing: border-box;
+}
+
+html {
+  min-width: 320px;
+  min-height: 100%;
+}
+
+body {
+  margin: 0;
+  min-width: 320px;
+  min-height: 100vh;
+  background: var(--bg-primary);
+  color: var(--text-primary);
+  font-family: 'Montserrat', 'Segoe UI', Arial, sans-serif;
+  transition:
+    background-color 0.2s ease,
+    color 0.2s ease;
+}
+
+button,
+input,
+textarea,
+select {
+  font: inherit;
+}
+
+button {
+  cursor: pointer;
+}
+
+a {
+  color: inherit;
+  text-decoration: none;
+}
+
+#root {
+  width: 100%;
+  min-height: 100vh;
+}
+
+h1,
+h2,
+h3,
+h4,
+h5,
+h6,
+p {
+  margin-top: 0;
+}
+
+:focus-visible {
+  outline: 2px solid var(--brand-cyan);
+  outline-offset: 3px;
+}
+
+/* SCROLLBARS */
+
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--text-muted) transparent;
+}
+
+.table-container {
+  width: 100%;
+  overflow-x: auto;
+}

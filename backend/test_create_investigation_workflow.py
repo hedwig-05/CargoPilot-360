@@ -1,49 +1,62 @@
+"""Manually create a sample investigation workflow.
+
+This file is named test_*.py for historical reasons, but it is a manual
+database utility, not an automatically discoverable unittest module.
+Run it explicitly with: python test_create_investigation_workflow.py
+"""
+
 import uuid
 
 from app.database.connection import SessionLocal
 from app.models import AgentWorkflow, AgentRun
 
-db = SessionLocal()
 
-try:
-    # Create the investigation workflow
-    workflow = AgentWorkflow(
-        workflow_public_id="WF-" + uuid.uuid4().hex[:12].upper(),
-        thread_id="THREAD-" + uuid.uuid4().hex[:12].upper(),
-        shipment_id=3,
-        exception_id=3,
-        trigger_type="MANUAL",
-        graph_name="cargopilot_main",
-        status="RUNNING",
-        current_node="INVESTIGATION"
-    )
+def main():
+    db = SessionLocal()
 
-    db.add(workflow)
-    db.flush()
+    try:
+        # Create the investigation workflow
+        workflow = AgentWorkflow(
+            workflow_public_id="WF-" + uuid.uuid4().hex[:12].upper(),
+            thread_id="THREAD-" + uuid.uuid4().hex[:12].upper(),
+            shipment_id=3,
+            exception_id=3,
+            trigger_type="MANUAL",
+            graph_name="cargopilot_main",
+            status="RUNNING",
+            current_node="INVESTIGATION",
+        )
 
-    # Create the investigation agent run
-    run = AgentRun(
-        run_public_id="RUN-" + uuid.uuid4().hex[:12].upper(),
-        workflow_id=workflow.workflow_id,
-        step_no=1,
-        agent_type="INVESTIGATION",
-        node_name="INVESTIGATION",
-        input_data={
-            "exception_id": 3,
-            "shipment_id": 3
-        },
-        execution_status="PROCESSING"
-    )
+        db.add(workflow)
+        db.flush()
 
-    db.add(run)
-    db.commit()
+        # Create the investigation agent run
+        run = AgentRun(
+            run_public_id="RUN-" + uuid.uuid4().hex[:12].upper(),
+            workflow_id=workflow.workflow_id,
+            step_no=1,
+            agent_type="INVESTIGATION",
+            node_name="INVESTIGATION",
+            input_data={
+                "exception_id": 3,
+                "shipment_id": 3,
+            },
+            execution_status="PROCESSING",
+        )
 
-    print("WORKFLOW CREATED:", workflow.workflow_id)
-    print("RUN CREATED:", run.run_id)
+        db.add(run)
+        db.commit()
 
-except Exception:
-    db.rollback()
-    raise
+        print("WORKFLOW CREATED:", workflow.workflow_id)
+        print("RUN CREATED:", run.run_id)
 
-finally:
-    db.close()
+    except Exception:
+        db.rollback()
+        raise
+
+    finally:
+        db.close()
+
+
+if __name__ == "__main__":
+    main()

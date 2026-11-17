@@ -1,5 +1,6 @@
 
 import hashlib
+import logging
 from pathlib import Path
 
 from fastapi import (
@@ -17,7 +18,10 @@ from app.database.connection import get_db
 from app.models import Document, Shipment
 from app.auth.dependencies import require_roles
 from app.engines.document_processing import process_document
+from app.engines.document_validation import validate_shipment_documents
 
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(
     prefix="/api/shipments",
@@ -320,12 +324,73 @@ async def upload_document(
                 detail={
                     "message": "Document uploaded, but extraction failed.",
                     "document_id": document_id,
-                    "error": str(processing_error)
+                    "error": "DOCUMENT_EXTRACTION_FAILED"
                 }
             )
 
         # ------------------------------------------
-        # STEP 11: RETURN RESULT
+        # STEP 11: VALIDATE WHEN BOTH REQUIRED
+        # DOCUMENTS HAVE BEEN EXTRACTED
+        # ------------------------------------------
+
+        validation_result = None
+        validation_error = None
+
+        if document_type in {"COMMERCIAL_INVOICE", "BILL_OF_LADING"}:
+            # Serialize validation per shipment. The initial upload lock was
+            # released by the document-record commit above, so reacquire it
+            # before reading the latest pair and upserting validation rows.
+            db.query(Shipment).filter(
+                Shipment.shipment_id == shipment_id
+            ).with_for_update().first()
+
+            required_documents = (
+                db.query(Document)
+                .filter(
+                    Document.shipment_id == shipment_id,
+                    Document.document_type.in_([
+                        "COMMERCIAL_INVOICE",
+                        "BILL_OF_LADING"
+                    ])
+                )
+                .order_by(
+                    Document.version_no.desc(),
+                    Document.upload_date.desc(),
+                    Document.document_id.desc()
+                )
+                .all()
+            )
+
+            # Validate only the latest version of each required type.
+            latest_documents = {}
+            for item in required_documents:
+                latest_documents.setdefault(item.document_type, item)
+
+            latest_invoice = latest_documents.get("COMMERCIAL_INVOICE")
+            latest_bill_of_lading = latest_documents.get("BILL_OF_LADING")
+
+            if (
+                latest_invoice is not None
+                and latest_bill_of_lading is not None
+                and latest_invoice.extraction_status == "EXTRACTED"
+                and latest_bill_of_lading.extraction_status == "EXTRACTED"
+            ):
+                try:
+                    validation_result = validate_shipment_documents(
+                        db=db,
+                        shipment_id=shipment_id,
+                        commit=True
+                    )
+                except Exception:
+                    db.rollback()
+                    logger.exception(
+                        "Document validation failed for shipment_id=%s",
+                        shipment_id
+                    )
+                    validation_error = "DOCUMENT_VALIDATION_FAILED"
+
+        # ------------------------------------------
+        # STEP 12: RETURN RESULT
         # ------------------------------------------
 
         return {
@@ -345,7 +410,9 @@ async def upload_document(
             ],
             "extracted_fields": processing_result[
                 "extracted_fields"
-            ]
+            ],
+            "validation_result": validation_result,
+            "validation_error": validation_error
         }
 
     except HTTPException:

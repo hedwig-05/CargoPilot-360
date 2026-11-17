@@ -1,11 +1,17 @@
+"""Manual MySQL connection smoke test."""
+from .connection import engine
 
-from connection import engine
 
-try:
-    with engine.connect() as connection:
-        print("Successfully connected to MySQL!")
-        print("CargoPilot database connection is working.")
+def main():
+    try:
+        with engine.connect():
+            print("Successfully connected to MySQL!")
+            print("CargoPilot database connection is working.")
+    except Exception as e:
+        print("Database connection failed!")
+        print(e)
+        raise
 
-except Exception as e:
-    print("Database connection failed!")
-    print(e)
+
+if __name__ == "__main__":
+    main()
