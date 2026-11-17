@@ -25,10 +25,25 @@ from app.api.resolution_verifications import (
     router as resolution_verifications_router
 )
 
+from fastapi.middleware.cors import CORSMiddleware
+
 app = FastAPI(
     title="CargoPilot 360",
     description="AI-powered Logistics Operations Management System",
     version="1.0.0"
+)
+
+# Enable CORS for frontend development
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=[
+        "http://localhost:5173",
+        "http://127.0.0.1:5173",
+        "http://localhost:3000",
+    ],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
 
 
