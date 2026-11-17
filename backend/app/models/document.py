@@ -1,4 +1,3 @@
-
 from sqlalchemy import (
     Column,
     Integer,
@@ -8,7 +7,8 @@ from sqlalchemy import (
     Text,
     CHAR,
     JSON,
-    ForeignKey
+    ForeignKey,
+    Numeric
 )
 from sqlalchemy.dialects.mysql import LONGTEXT
 from sqlalchemy.sql import func
@@ -36,6 +36,18 @@ class Document(Base):
         ),
         nullable=False
     )
+
+    # OTHER is the storage category. These fields identify the actual
+    # supporting-document family and its evidentiary purpose.
+    document_subtype = Column(String(50), nullable=True)
+
+    evidence_role = Column(
+        Enum("INCIDENT_EVIDENCE", "RESOLUTION_EVIDENCE"),
+        nullable=True
+    )
+
+    # Structured-field completeness, not OCR probability or factual truth.
+    extraction_confidence = Column(Numeric(5, 4), nullable=True)
 
     file_name = Column(String(255), nullable=False)
     file_path = Column(String(500), nullable=False)
