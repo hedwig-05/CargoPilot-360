@@ -9,7 +9,7 @@ from sqlalchemy.orm import Session
 from pydantic import BaseModel, Field
 
 from app.database.connection import get_db
-from app.models import Action, ActionExecution
+from app.models import Action, ActionExecution, ResolutionPlan
 from app.models.user import User
 
 from app.api.helpers import (
@@ -59,6 +59,62 @@ def get_all_actions(
     records = get_all_records(db, Action)
 
     return serialize_records(records, Action)
+
+
+# ==================================================
+# GET ACTIONS AWAITING HUMAN APPROVAL
+# ==================================================
+
+@router.get("/actions/pending-approval")
+def get_pending_approval_actions(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(
+        require_roles("ADMIN", "MANAGER")
+    )
+):
+    """
+    Return the action queue that authorized managers can review.
+
+    This endpoint is read-only. It never approves or executes actions.
+    """
+
+    records = (
+        db.query(Action, ResolutionPlan)
+        .join(
+            ResolutionPlan,
+            Action.plan_id == ResolutionPlan.plan_id
+        )
+        .filter(
+            Action.requires_approval.is_(True),
+            Action.approval_status == "PENDING",
+            Action.execution_status == "NOT_STARTED",
+            ResolutionPlan.status == "PENDING_APPROVAL"
+        )
+        .order_by(
+            Action.created_at.asc(),
+            Action.action_id.asc()
+        )
+        .all()
+    )
+
+    return [
+        {
+            "action_id": action.action_id,
+            "plan_id": plan.plan_id,
+            "workflow_id": action.workflow_id,
+            "action_type": action.action_type,
+            "action_description": action.action_description,
+            "action_payload": action.action_payload,
+            "approval_status": action.approval_status,
+            "execution_status": action.execution_status,
+            "created_at": action.created_at,
+            "plan_priority": plan.priority,
+            "plan_status": plan.status,
+            "proposed_solution": plan.proposed_solution,
+            "reasoning": plan.reasoning
+        }
+        for action, plan in records
+    ]
 
 
 # ==================================================
