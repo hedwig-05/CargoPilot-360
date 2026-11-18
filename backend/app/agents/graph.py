@@ -782,17 +782,36 @@ def llm_analysis_node(state: CargoPilotState):
                 }
             }
 
-            selected_tool_data = next(
+            selected_tool_results = [
+                {
+                    "round_no": item.get("round_no"),
+                    "selection": item.get("selection"),
+                    "tool_output": item.get("tool_output"),
+                    "selection_status": item.get("selection_status", "COMPLETED"),
+                    "error": item.get("error")
+                }
+                for item in state.get("tool_selection_results", [])
+                if item.get("exception_id") == exception_id
+            ]
+
+            # Keep the original singular field for compatibility with
+            # consumers that expect the first selected tool result.
+            first_successful_tool_result = next(
                 (
                     item.get("tool_output")
-                    for item in state.get("tool_selection_results", [])
-                    if item.get("exception_id") == exception_id
-                    and item.get("selection_status") != "FAILED"
+                    for item in selected_tool_results
+                    if item.get("selection_status") != "FAILED"
+                    and item.get("tool_output") is not None
                 ),
                 None
             )
 
-            evidence["selected_read_only_tool_result"] = selected_tool_data
+            evidence["selected_read_only_tool_result"] = (
+                first_successful_tool_result
+            )
+            evidence["selected_read_only_tool_results"] = (
+                selected_tool_results
+            )
 
             prompt = f"""
 You are the investigation analysis assistant
@@ -801,7 +820,7 @@ for CargoPilot 360, a logistics operations system.
 Analyze the following verified investigation findings.
 
 INVESTIGATION DATA:
-{evidence}
+{json.dumps(evidence, ensure_ascii=False, default=str)}
 
 INSTRUCTIONS:
 
