@@ -99,8 +99,6 @@ def request_manager_authorized_retry(
     A new plan/action is created, and a manager must approve it separately.
     """
 
-    from datetime import datetime
-
     from sqlalchemy import func
     from app.models import (
         Action,
