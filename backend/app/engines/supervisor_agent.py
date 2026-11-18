@@ -206,6 +206,9 @@ def run_adaptive_diagnostics(
     tools for one exception. The model never supplies tool arguments.
     Each selection round is recorded as an AgentRun.
     """
+    workflow.current_node = "TOOL_SELECTION"
+    db.commit()
+
     max_tool_calls = 3
     executed_tools = set()
     diagnostic_results = []
