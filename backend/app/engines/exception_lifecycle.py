@@ -8,6 +8,7 @@ from app.models import (
     Exception as ShipmentException,
     ExceptionStatusHistory,
     AuditLog,
+    ResolutionVerification,
 )
 
 
@@ -478,10 +479,14 @@ def resolve_exception(
     commit: bool = True,
     operator_id: int = None
 ):
+    # Retained for backward compatibility: False still blocks an explicit
+    # unverified request, but True is not accepted as proof of verification.
     if not verified:
         raise ValueError("Exception cannot be resolved without verification.")
+
     if not resolution_notes or not resolution_notes.strip():
         raise ValueError("Resolution notes are required.")
+
     try:
         exception = (
             db.query(ShipmentException)
@@ -489,21 +494,63 @@ def resolve_exception(
             .with_for_update()
             .first()
         )
+
         if exception is None:
             raise ValueError(f"Exception ID {exception_id} not found.")
+
+        # Preserve the existing idempotent behaviour for terminal exceptions.
         if exception.status in ("RESOLVED", "CLOSED"):
             return {
-                "success": True, "message": "Exception is already resolved.",
-                "exception_id": exception_id, "status": exception.status
+                "success": True,
+                "message": "Exception is already resolved.",
+                "exception_id": exception_id,
+                "status": exception.status
             }
-        exception.resolution_notes = resolution_notes.strip()
+
+        # Read the latest verification for this exception. Do not filter by
+        # shipment or status before ordering: a newer mismatched or
+        # inconclusive record must not be hidden by an older VERIFIED record.
+        latest_verification = (
+            db.query(ResolutionVerification)
+            .filter(
+                ResolutionVerification.exception_id == exception_id
+            )
+            .order_by(
+                ResolutionVerification.verified_at.desc(),
+                ResolutionVerification.verification_id.desc()
+            )
+            .with_for_update()
+            .first()
+        )
+
+        if latest_verification is None:
+            raise ValueError(
+                "Exception cannot be resolved: no verification record exists."
+            )
+
+        if latest_verification.shipment_id != exception.shipment_id:
+            raise ValueError(
+                "Exception cannot be resolved: verification shipment "
+                "does not match the exception."
+            )
+
+        if latest_verification.verification_status != "VERIFIED":
+            raise ValueError(
+                "Exception cannot be resolved: the latest verification "
+                "is not VERIFIED."
+            )
+
         result = transition_exception_status(
-            db=db, exception_id=exception_id, new_status="RESOLVED",
-            operator_id=operator_id, commit=commit,
+            db=db,
+            exception_id=exception_id,
+            new_status="RESOLVED",
+            operator_id=operator_id,
+            commit=commit,
             resolution_notes=resolution_notes.strip()
         )
         result["message"] = "Exception resolved successfully."
         return result
+
     except Exception:
         db.rollback()
         raise
