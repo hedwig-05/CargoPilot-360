@@ -463,6 +463,7 @@ def run_supervisor(
         "exceptions_found": [],
         "exception_workflows": [],
         "investigations": [],
+        "diagnostic_tools": [],
         "risk_assessments": [],
         "resolution_plans": [],
         "warnings": [],
@@ -970,7 +971,41 @@ def run_supervisor(
             step_no += 1
 
             # ----------------------------------------------
-            # 7D. RISK ASSESSMENT AGENT
+            # 7D. ADAPTIVE READ-ONLY DIAGNOSTICS
+            # ----------------------------------------------
+
+            diagnostic_results = run_adaptive_diagnostics(
+                db=db,
+                workflow=child_workflow,
+                parent_run_id=investigation_run_id,
+                shipment_id=shipment_id,
+                exception_data={
+                    "exception_id": exception_id,
+                    "shipment_id": shipment_id,
+                    "exception_type": exception.exception_type,
+                    "description": exception.description,
+                    "severity": exception.severity,
+                    "status": exception.status
+                },
+                investigation_data={
+                    "summary": investigation_result.get("summary"),
+                    "possible_cause": investigation_result.get("possible_cause"),
+                    "affected_process": investigation_result.get("affected_process"),
+                    "urgency": investigation_result.get("urgency"),
+                    "recommended_next": investigation_result.get("recommended_next"),
+                    "evidence_count": investigation_result.get("evidence_count")
+                },
+                first_step_no=step_no
+            )
+
+            results["diagnostic_tools"].append({
+                "exception_id": exception_id,
+                "results": diagnostic_results
+            })
+            step_no += max(1, len(diagnostic_results))
+
+            # ----------------------------------------------
+            # 7E. RISK ASSESSMENT AGENT
             # ----------------------------------------------
 
             child_workflow = (
@@ -1131,7 +1166,8 @@ def run_supervisor(
                         "possible_cause": investigation_record.possible_cause,
                         "affected_process": investigation_record.affected_process,
                         "urgency": investigation_record.urgency,
-                        "recommended_next": investigation_record.recommended_next
+                        "recommended_next": investigation_record.recommended_next,
+                        "diagnostic_tool_results": diagnostic_results
                     }
                     risk_context = {
                         "risk_id": risk_record.risk_id,
