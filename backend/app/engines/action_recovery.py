@@ -340,6 +340,21 @@ def request_manager_alternative_action(
             "side-effect state is uncertain."
         )
 
+    from sqlalchemy import func
+    total_attempts = (
+        db.query(func.count(ActionExecution.execution_id))
+        .join(Action, Action.action_id == ActionExecution.action_id)
+        .join(ResolutionPlan, ResolutionPlan.plan_id == Action.plan_id)
+        .filter(ResolutionPlan.exception_id == exception.exception_id)
+        .scalar()
+        or 0
+    )
+    if total_attempts >= MAX_AUTOMATIC_ATTEMPTS:
+        raise ValueError(
+            "The exception-level recovery attempt limit has been reached. "
+            "Manual intervention is required."
+        )
+
     allowed = RECOVERY_ACTION_OPTIONS.get(exception.exception_type, {})
     if not allowed:
         raise ValueError(
