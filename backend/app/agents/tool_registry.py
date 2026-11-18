@@ -1,5 +1,4 @@
 import json
-import re
 
 from app.models import Document, DocumentValidation, ShipmentEvent
 
@@ -101,7 +100,6 @@ def get_document_validation_summary(db, shipment_id):
                 "document_type": document_type,
                 "field_name": validation.field_name,
                 "result": validation.validation_result,
-                "explanation": validation.explanation,
                 "validated_at": (
                     validation.validated_at.isoformat()
                     if validation.validated_at else None
@@ -179,7 +177,7 @@ def execute_registered_tool(db, tool_name, shipment_id):
     if handler is None:
         raise ValueError(f"Tool '{tool_name}' is not registered.")
 
-    if not isinstance(shipment_id, int) or shipment_id <= 0:
+    if isinstance(shipment_id, bool) or not isinstance(shipment_id, int) or shipment_id <= 0:
         raise ValueError("A valid shipment_id is required.")
 
     return {
@@ -198,13 +196,17 @@ def parse_tool_selection(response_text):
 
     cleaned = response_text.strip()
 
-    if cleaned.startswith("```"):
-        cleaned = re.sub(
-            r"^\`\`\`(?:json)?\s*|\s*\`\`\`$",
-            "",
-            cleaned,
-            flags=re.IGNORECASE
-        ).strip()
+    if cleaned.startswith(chr(96) * 3):
+        lines = cleaned.splitlines()
+
+        if len(lines) < 3 or lines[-1].strip() != chr(96) * 3:
+            raise ValueError("Tool selection contains an invalid code fence.")
+
+        fence_language = lines[0].strip().lower()
+        if fence_language not in (chr(96) * 3, chr(96) * 3 + "json"):
+            raise ValueError("Tool selection code fence must be JSON.")
+
+        cleaned = "\n".join(lines[1:-1]).strip()
 
     try:
         selection = json.loads(cleaned)
