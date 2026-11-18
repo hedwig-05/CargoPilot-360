@@ -82,6 +82,11 @@ def get_pending_action(db: Session, action_id: int):
             f"Current approval status: {action.approval_status}."
         )
 
+    if action.execution_status != "NOT_STARTED":
+        raise ValueError(
+            "Only actions that have not started execution can be approved or rejected."
+        )
+
     plan = (
         db.query(ResolutionPlan)
         .filter(
@@ -245,7 +250,8 @@ def approve_action(
             "plan_status": plan.status,
             "workflow_status": workflow.status,
             "approved_by": approver.user_id,
-            "approved_at": current_time.isoformat()
+            "approved_at": current_time.isoformat(),
+            "dependent_workflows_updated": dependent_count
         }
 
     except Exception:
@@ -276,6 +282,11 @@ def reject_action(
         if not rejection_reason or not rejection_reason.strip():
             raise ValueError(
                 "A rejection reason must be provided."
+            )
+
+        if len(rejection_reason.strip()) > 1000:
+            raise ValueError(
+                "The rejection reason cannot exceed 1000 characters."
             )
 
         action, plan, workflow = get_pending_action(
@@ -339,7 +350,10 @@ def reject_action(
             "approval_status": action.approval_status,
             "plan_status": plan.status,
             "workflow_status": workflow.status,
-            "rejection_reason": action.rejection_reason
+            "rejection_reason": action.rejection_reason,
+            "rejected_by": approver.user_id,
+            "rejected_at": current_time.isoformat(),
+            "dependent_workflows_updated": dependent_count
         }
 
     except Exception:
