@@ -307,6 +307,7 @@ def monitoring_node(state: CargoPilotState):
             "monitoring_results": monitoring_results,
             "investigation_results": [],
             "llm_analysis_results": [],
+            "tool_selection_results": [],
             "risk_assessment_results": [],
             "resolution_results": [],
             "errors": []
@@ -1317,6 +1318,9 @@ def finish_node(state: CargoPilotState):
                 ),
                 "llm_analysis_results": state.get(
                     "llm_analysis_results", []
+                ),
+                "tool_selection_results": state.get(
+                    "tool_selection_results", []
                 ),
                 "risk_assessment_results": state.get(
                     "risk_assessment_results", []
