@@ -6,6 +6,7 @@ from fastapi import (
     status
 )
 from sqlalchemy.orm import Session
+from sqlalchemy import func
 from pydantic import BaseModel, Field
 
 from app.database.connection import get_db
@@ -136,7 +137,7 @@ def get_action_recovery_review(
     latest_attempts = (
         db.query(
             ActionExecution.action_id.label("action_id"),
-            __import__("sqlalchemy").func.max(
+            func.max(
                 ActionExecution.attempt_no
             ).label("latest_attempt_no")
         )
