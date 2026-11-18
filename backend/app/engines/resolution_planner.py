@@ -7,8 +7,6 @@ from sqlalchemy.orm import Session
 
 from app.engines.exception_lifecycle import transition_exception_status
 
-from app.engines.decision_advisor import assess_resolution_plan
-
 from app.models import (
     Exception as ShipmentException,
     AgentWorkflow,
@@ -181,7 +179,8 @@ def generate_resolution_reasoning(exception, investigation, risk):
 def create_resolution_plan(
     db: Session,
     exception_id: int,
-    triggered_by: int = None
+    triggered_by: int = None,
+    decision_advisory: dict = None
 ):
 
     started_at = datetime.now()
@@ -388,37 +387,19 @@ def create_resolution_plan(
             risk
         )
 
-        # The LLM reviews the rule-generated proposal but cannot
-        # change the action, priority, or human approval requirement.
-        decision_advisory = assess_resolution_plan(
-            exception_data={
-                "exception_id": exception.exception_id,
-                "shipment_id": exception.shipment_id,
-                "exception_type": exception.exception_type,
-                "description": exception.description,
-                "severity": exception.severity
-            },
-            investigation_data={
-                "investigation_id": investigation.investigation_id,
-                "summary": investigation.summary,
-                "possible_cause": investigation.possible_cause,
-                "affected_process": investigation.affected_process,
-                "urgency": investigation.urgency,
-                "recommended_next": investigation.recommended_next
-            },
-            risk_data={
-                "risk_id": risk.risk_id,
-                "risk_score": float(risk.risk_score),
-                "risk_level": risk.risk_level,
-                "explanation": risk.explanation
-            },
-            proposed_action={
-                "action_type": rule["action_type"],
-                "description": rule["description"],
-                "priority": priority,
-                "requires_human_approval": True
+        # If no advisory was supplied, fail closed and keep the
+        # deterministic rule-based proposal for manual review.
+        if decision_advisory is None:
+            decision_advisory = {
+                "advisor_status": "NOT_RUN",
+                "recommendation": "REVIEW_REQUIRED",
+                "confidence": "LOW",
+                "rationale": (
+                    "Automated decision review was not available. "
+                    "The rule-based proposal requires manual assessment."
+                ),
+                "missing_information": []
             }
-        )
 
         reasoning += (
             "\n\nAI DECISION ADVISORY (not an approval): "
