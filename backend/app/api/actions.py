@@ -31,6 +31,10 @@ from app.engines.action_executor import (
     execute_action
 )
 
+from app.engines.action_recovery import (
+    request_manager_authorized_retry
+)
+
 
 router = APIRouter(
     prefix="/api",
@@ -274,6 +278,50 @@ def reject_action_endpoint(
             action_id=action_id,
             approver=current_user,
             rejection_reason=request.rejection_reason
+        )
+
+    except LookupError as error:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=str(error)
+        )
+
+    except ValueError as error:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(error)
+        )
+
+    except PermissionError as error:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=str(error)
+        )
+
+
+# ==================================================
+# REQUEST SAFE ACTION RECOVERY
+# ==================================================
+
+@router.post("/actions/{action_id}/recover")
+def recover_failed_action_endpoint(
+    action_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(
+        require_roles("ADMIN", "MANAGER")
+    )
+):
+    """
+    Request a fresh resolution proposal after an eligible transient failure.
+
+    The failed action is never reset or re-executed. A new action is created
+    and must receive a separate manager approval before execution.
+    """
+    try:
+        return request_manager_authorized_retry(
+            db=db,
+            action_id=action_id,
+            manager=current_user
         )
 
     except LookupError as error:
