@@ -249,3 +249,200 @@ def request_manager_authorized_retry(
     proposal["recovery_requested_by"] = manager_id
     proposal["approval_required"] = True
     return proposal
+
+
+def request_manager_alternative_action(
+    db,
+    action_id: int,
+    manager,
+) -> dict:
+    """Ask the constrained recovery advisor for a fresh, approval-gated alternative."""
+
+    from app.models import (
+        Action,
+        ActionExecution,
+        AgentRun,
+        AuditLog,
+        ResolutionPlan,
+        Exception as ShipmentException,
+    )
+    from app.engines.resolution_planner import (
+        RECOVERY_ACTION_OPTIONS,
+        create_resolution_plan,
+    )
+    from app.engines.decision_advisor import assess_recovery_alternative
+
+    if manager is None or not getattr(manager, "is_active", False):
+        raise PermissionError("An active manager account is required.")
+    if getattr(manager, "role", None) not in {"ADMIN", "MANAGER"}:
+        raise PermissionError("Only ADMIN and MANAGER users can request recovery.")
+
+    action = (
+        db.query(Action)
+        .filter(Action.action_id == action_id)
+        .with_for_update()
+        .first()
+    )
+    if action is None:
+        raise LookupError(f"Action {action_id} was not found.")
+    if action.execution_status != "FAILED":
+        raise ValueError("Only failed actions can enter alternative recovery.")
+
+    old_plan = (
+        db.query(ResolutionPlan)
+        .filter(ResolutionPlan.plan_id == action.plan_id)
+        .with_for_update()
+        .first()
+    )
+    if old_plan is None:
+        raise LookupError("The failed action's resolution plan was not found.")
+
+    exception = (
+        db.query(ShipmentException)
+        .filter(ShipmentException.exception_id == old_plan.exception_id)
+        .with_for_update()
+        .first()
+    )
+    if exception is None:
+        raise LookupError("The exception associated with this action was not found.")
+    if exception.status in {"RESOLVED", "CLOSED"}:
+        raise ValueError("A resolved or closed exception cannot be recovered.")
+
+    latest_execution = (
+        db.query(ActionExecution)
+        .filter(ActionExecution.action_id == action_id)
+        .order_by(ActionExecution.attempt_no.desc(), ActionExecution.execution_id.desc())
+        .first()
+    )
+    if latest_execution is None or latest_execution.status != "FAILED":
+        raise ValueError("A recorded failed execution attempt is required.")
+
+    latest_run = (
+        db.query(AgentRun)
+        .filter(AgentRun.run_id == latest_execution.run_id)
+        .first()
+    )
+    recovery_analysis = (
+        (latest_run.output_data or {}).get("recovery_analysis")
+        if latest_run else None
+    )
+    if not isinstance(recovery_analysis, dict):
+        raise ValueError("No structured recovery assessment is available.")
+
+    if recovery_analysis.get("recovery_decision") != "REPLAN_REQUIRED":
+        raise ValueError(
+            "Alternative-action selection is currently restricted to failures "
+            "classified as requiring a new plan."
+        )
+    if recovery_analysis.get("side_effect_state") != "NOT_COMMITTED":
+        raise ValueError(
+            "Alternative-action selection is blocked because the external "
+            "side-effect state is uncertain."
+        )
+
+    allowed = RECOVERY_ACTION_OPTIONS.get(exception.exception_type, {})
+    if not allowed:
+        raise ValueError(
+            "No safe alternative actions are configured for this exception type."
+        )
+
+    # Copy only the facts needed by the advisor before releasing DB locks.
+    failure_context = {
+        "exception_id": exception.exception_id,
+        "shipment_id": exception.shipment_id,
+        "exception_type": exception.exception_type,
+        "exception_description": exception.description,
+        "severity": exception.severity,
+        "failed_action_id": action.action_id,
+        "failed_action_type": action.action_type,
+        "failed_action_description": action.action_description,
+        "failed_action_payload": action.action_payload or {},
+        "failure_category": recovery_analysis.get("failure_category"),
+        "recovery_decision": recovery_analysis.get("recovery_decision"),
+        "error_type": recovery_analysis.get("error_type"),
+        "failure_reason": recovery_analysis.get("reason"),
+        "side_effect_state": recovery_analysis.get("side_effect_state"),
+        "attempt_no": latest_execution.attempt_no,
+    }
+    exception_id = exception.exception_id
+    failed_plan_id = old_plan.plan_id
+    failed_action_id = action.action_id
+    manager_id = manager.user_id
+    manager_name = manager.name
+    shipment_id = exception.shipment_id
+    workflow_id = action.workflow_id
+
+    db.rollback()
+    advisory = assess_recovery_alternative(
+        failure_context=failure_context,
+        allowed_alternatives=allowed,
+    )
+
+    if (
+        advisory.get("advisor_status") != "COMPLETED"
+        or advisory.get("decision") != "SELECT_ALTERNATIVE"
+        or advisory.get("selected_action_type") not in allowed
+    ):
+        return {
+            "message": "No alternative action was generated. Manager review is required.",
+            "failed_action_id": failed_action_id,
+            "failed_plan_id": failed_plan_id,
+            "recovery_advisory": advisory,
+            "replacement_created": False,
+            "human_approval_required": True,
+        }
+
+    planner_advisory = {
+        "advisor_status": "COMPLETED",
+        "recommendation": "PROCEED_TO_HUMAN_APPROVAL",
+        "confidence": advisory["confidence"],
+        "rationale": advisory["rationale"],
+        "missing_information": advisory["missing_information"],
+        "recovery_decision": advisory["decision"],
+        "selected_action_type": advisory["selected_action_type"],
+    }
+
+    proposal = create_resolution_plan(
+        db=db,
+        exception_id=exception_id,
+        triggered_by=manager_id,
+        decision_advisory=planner_advisory,
+        recovery_action_type=advisory["selected_action_type"],
+    )
+
+    replacement_plan = (
+        db.query(ResolutionPlan)
+        .filter(ResolutionPlan.plan_id == proposal["plan_id"])
+        .with_for_update()
+        .first()
+    )
+    if replacement_plan is None:
+        raise RuntimeError("The alternative resolution plan could not be reloaded.")
+
+    replacement_plan.supersedes_plan_id = failed_plan_id
+    db.add(AuditLog(
+        actor_type="USER",
+        actor_user_id=manager_id,
+        actor_name=manager_name,
+        action="ACTION_ALTERNATIVE_RECOVERY_PROPOSED",
+        entity_type="ACTION",
+        entity_id=failed_action_id,
+        shipment_id=shipment_id,
+        workflow_id=workflow_id,
+        details={
+            "failed_action_id": failed_action_id,
+            "failed_plan_id": failed_plan_id,
+            "replacement_action_id": proposal["action_id"],
+            "replacement_plan_id": proposal["plan_id"],
+            "selected_action_type": advisory["selected_action_type"],
+            "advisor_confidence": advisory["confidence"],
+            "approval_required": True,
+        },
+    ))
+    db.commit()
+
+    proposal["supersedes_plan_id"] = failed_plan_id
+    proposal["recovery_advisory"] = advisory
+    proposal["approval_required"] = True
+    proposal["replacement_created"] = True
+    return proposal
