@@ -716,6 +716,18 @@ def llm_analysis_node(state: CargoPilotState):
                 }
             }
 
+            selected_tool_data = next(
+                (
+                    item.get("tool_output")
+                    for item in state.get("tool_selection_results", [])
+                    if item.get("exception_id") == exception_id
+                    and item.get("selection_status") != "FAILED"
+                ),
+                None
+            )
+
+            evidence["selected_read_only_tool_result"] = selected_tool_data
+
             prompt = f"""
 You are the investigation analysis assistant
 for CargoPilot 360, a logistics operations system.
