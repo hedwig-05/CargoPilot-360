@@ -187,13 +187,22 @@ def request_manager_authorized_retry(
     if total_attempts >= MAX_AUTOMATIC_ATTEMPTS:
         raise ValueError("The exception-level retry attempt limit has been reached.")
 
+    # Capture scalar identifiers before releasing the read/row locks.
+    exception_id = exception.exception_id
+    shipment_id = exception.shipment_id
+    workflow_id = action.workflow_id
+    failed_action_id = action.action_id
+    failed_plan_id = old_plan.plan_id
+    manager_id = manager.user_id
+    manager_name = manager.name
+
     # The existing deterministic planner creates a new action. No old action
     # or approval is reused, and the new action remains pending manager approval.
     db.rollback()
     proposal = create_resolution_plan(
         db=db,
-        exception_id=exception.exception_id,
-        triggered_by=manager.user_id,
+        exception_id=exception_id,
+        triggered_by=manager_id,
         decision_advisory=None,
     )
 
@@ -206,7 +215,7 @@ def request_manager_authorized_retry(
     if new_plan is None:
         raise RuntimeError("The replacement resolution plan could not be reloaded.")
 
-    new_plan.supersedes_plan_id = old_plan.plan_id
+    new_plan.supersedes_plan_id = failed_plan_id
     new_plan.reasoning = (
         (new_plan.reasoning or "")
         + "\n\nRECOVERY CONTEXT: This is a fresh, manager-requested "
@@ -217,16 +226,16 @@ def request_manager_authorized_retry(
 
     db.add(AuditLog(
         actor_type="USER",
-        actor_user_id=manager.user_id,
-        actor_name=manager.name,
+        actor_user_id=manager_id,
+        actor_name=manager_name,
         action="ACTION_RECOVERY_REQUESTED",
         entity_type="ACTION",
-        entity_id=action.action_id,
-        shipment_id=exception.shipment_id,
-        workflow_id=action.workflow_id,
+        entity_id=failed_action_id,
+        shipment_id=shipment_id,
+        workflow_id=workflow_id,
         details={
-            "failed_action_id": action.action_id,
-            "failed_plan_id": old_plan.plan_id,
+            "failed_action_id": failed_action_id,
+            "failed_plan_id": failed_plan_id,
             "replacement_action_id": proposal["action_id"],
             "replacement_plan_id": proposal["plan_id"],
             "total_exception_attempts": total_attempts,
@@ -236,7 +245,7 @@ def request_manager_authorized_retry(
     ))
     db.commit()
 
-    proposal["supersedes_plan_id"] = old_plan.plan_id
-    proposal["recovery_requested_by"] = manager.user_id
+    proposal["supersedes_plan_id"] = failed_plan_id
+    proposal["recovery_requested_by"] = manager_id
     proposal["approval_required"] = True
     return proposal
