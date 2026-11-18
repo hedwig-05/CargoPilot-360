@@ -840,7 +840,17 @@ def execute_action(
 
             prior_attempts = (
                 db.query(ActionExecution)
-                .filter(ActionExecution.action_id == action.action_id)
+                .join(
+                    Action,
+                    Action.action_id == ActionExecution.action_id
+                )
+                .join(
+                    ResolutionPlan,
+                    ResolutionPlan.plan_id == Action.plan_id
+                )
+                .filter(
+                    ResolutionPlan.exception_id == plan.exception_id
+                )
                 .count()
             )
             recovery_analysis = analyze_action_failure(
