@@ -30,9 +30,11 @@ from app.engines.investigation import investigate_exception
 
 from app.engines.risk_assessment import assess_shipment_risk
 
-from app.engines.resolution_planner import create_resolution_plan
+from app.engines.resolution_planner import (
+    create_resolution_plan,
+    RESOLUTION_RULES
+)
 from app.engines.decision_advisor import assess_resolution_plan
-from app.engines.resolution_planner import RESOLUTION_RULES
 
 from app.llm.router import create_llm_router
 
@@ -1357,14 +1359,18 @@ def decision_node(state: CargoPilotState):
                             risk_data=risk_context,
                             proposed_action={
                                 "action_type": RESOLUTION_RULES.get(
-                                    exception_record.exception_type, {}
+                                    exception_context["exception_type"], {}
                                 ).get("action_type"),
                                 "description": RESOLUTION_RULES.get(
-                                    exception_record.exception_type, {}
+                                    exception_context["exception_type"], {}
                                 ).get("description"),
                                 "requires_human_approval": True
                             }
                         )
+
+                # Release any remaining read transaction before the
+                # planner performs its concurrency-protected writes.
+                db.rollback()
 
                 result = create_resolution_plan(
                     db=db,
