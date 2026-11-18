@@ -1,5 +1,6 @@
 import unittest
 from datetime import datetime, timedelta
+from uuid import uuid4
 
 from app.database.connection import DB_NAME, SessionLocal
 from app.engines.exception_lifecycle import (
@@ -11,6 +12,9 @@ from app.models import (
     Shipment,
     Exception as ShipmentException,
     ExceptionStatusHistory,
+    AgentWorkflow,
+    AgentRun,
+    ResolutionVerification,
 )
 
 
@@ -80,6 +84,57 @@ class ExceptionLifecycleRegressionTests(unittest.TestCase):
             .filter(ShipmentException.exception_id == exception_id)
             .one()
         )
+
+    def _create_verification(
+        self,
+        exception_id,
+        verification_status,
+        shipment_id=None,
+        verified_at=None,
+    ):
+        exception = self._get_exception(exception_id)
+        unique_id = uuid4().hex
+
+        workflow = AgentWorkflow(
+            workflow_public_id=f"TEST-WF-{unique_id}",
+            thread_id=f"TEST-THREAD-{unique_id}",
+            shipment_id=exception.shipment_id,
+            exception_id=exception_id,
+            trigger_type="MANUAL",
+            graph_name="cargopilot_main",
+            status="COMPLETED",
+            current_node="RESOLUTION_VERIFICATION",
+        )
+        self.db.add(workflow)
+        self.db.flush()
+
+        run = AgentRun(
+            run_public_id=f"TEST-RUN-{unique_id}",
+            workflow_id=workflow.workflow_id,
+            step_no=1,
+            agent_type="VERIFICATION",
+            node_name="resolution_verification",
+            execution_status="COMPLETED",
+        )
+        self.db.add(run)
+        self.db.flush()
+
+        verification = ResolutionVerification(
+            exception_id=exception_id,
+            shipment_id=(
+                shipment_id if shipment_id is not None
+                else exception.shipment_id
+            ),
+            workflow_id=workflow.workflow_id,
+            run_id=run.run_id,
+            verification_status=verification_status,
+            evidence_summary="TEST ONLY: lifecycle verification fixture.",
+            validation_results=[],
+            verified_at=verified_at or datetime.now(),
+        )
+        self.db.add(verification)
+        self.db.flush()
+        return verification
 
     def test_creation_records_initial_open_history(self):
         exception_id = self._create_exception()
@@ -181,6 +236,81 @@ class ExceptionLifecycleRegressionTests(unittest.TestCase):
                 verified=True,
                 commit=False,
             )
+
+    def test_resolution_rejects_caller_boolean_without_database_verification(self):
+        exception_id = self._create_exception()
+
+        with self.assertRaisesRegex(
+            ValueError, "no verification record exists"
+        ):
+            resolve_exception(
+                self.db,
+                exception_id,
+                "TEST ONLY: caller supplied verified=True.",
+                verified=True,
+                commit=False,
+            )
+
+    def test_resolution_rejects_latest_non_verified_record(self):
+        exception_id = self._create_exception()
+        now = datetime.now()
+
+        self._create_verification(
+            exception_id,
+            "VERIFIED",
+            verified_at=now - timedelta(minutes=1),
+        )
+        self._create_verification(
+            exception_id,
+            "INCONCLUSIVE",
+            verified_at=now,
+        )
+
+        with self.assertRaisesRegex(
+            ValueError, "latest verification is not VERIFIED"
+        ):
+            resolve_exception(
+                self.db,
+                exception_id,
+                "TEST ONLY: older VERIFIED record must not win.",
+                verified=True,
+                commit=False,
+            )
+
+    def test_resolution_rejects_verification_for_another_shipment(self):
+        exception_id = self._create_exception()
+        other_shipment = (
+            self.db.query(Shipment)
+            .filter(Shipment.shipment_id != self.shipment.shipment_id)
+            .first()
+        )
+        if other_shipment is None:
+            self.skipTest("A second shipment is required for this regression.")
+
+        self._create_verification(
+            exception_id,
+            "VERIFIED",
+            shipment_id=other_shipment.shipment_id,
+        )
+
+        with self.assertRaisesRegex(
+            ValueError, "verification shipment does not match"
+        ):
+            resolve_exception(
+                self.db,
+                exception_id,
+                "TEST ONLY: mismatched shipment verification.",
+                verified=True,
+                commit=False,
+            )
+
+    def test_resolution_succeeds_with_latest_matching_verified_record(self):
+        exception_id = self._create_exception()
+        self._create_verification(
+            exception_id,
+            "VERIFIED",
+            verified_at=datetime.now(),
+        )
 
         result = resolve_exception(
             self.db,
