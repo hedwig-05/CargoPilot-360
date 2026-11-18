@@ -17,14 +17,20 @@ from app.models import (
     Exception as ShipmentException,
     ResolutionPlan,
     Action,
-    SupervisorWorkflowLink
+    SupervisorWorkflowLink,
+    Investigation,
+    RiskAssessment
 )
 
 from app.engines.document_processing import process_document
 from app.engines.document_validation import validate_shipment_documents
 from app.engines.investigation import investigate_exception
 from app.engines.risk_assessment import assess_shipment_risk
-from app.engines.resolution_planner import create_resolution_plan
+from app.engines.resolution_planner import (
+    create_resolution_plan,
+    RESOLUTION_RULES
+)
+from app.engines.decision_advisor import assess_resolution_plan
 from app.engines.action_executor import execute_action
 from app.engines.resolution_verification import verify_exception_resolution
 from app.engines.supervisor_lifecycle import (
@@ -923,13 +929,89 @@ def run_supervisor(
             )
 
             child_workflow.current_node = "DECISION"
+            db.commit()
 
             try:
 
+                # Gather the latest investigation and matching risk evidence
+                # before asking the decision advisor. The LLM receives only
+                # structured case facts and cannot alter the rule-based action.
+                investigation_record = (
+                    db.query(Investigation)
+                    .filter(
+                        Investigation.exception_id == exception_id,
+                        Investigation.status == "COMPLETED"
+                    )
+                    .order_by(
+                        Investigation.created_at.desc(),
+                        Investigation.investigation_id.desc()
+                    )
+                    .first()
+                )
+
+                risk_record = (
+                    db.query(RiskAssessment)
+                    .filter(
+                        RiskAssessment.workflow_id == child_workflow_id,
+                        RiskAssessment.shipment_id == shipment_id
+                    )
+                    .order_by(
+                        RiskAssessment.assessed_at.desc(),
+                        RiskAssessment.risk_id.desc()
+                    )
+                    .first()
+                )
+
+                decision_advisory = None
+
+                if investigation_record and risk_record:
+                    exception_context = {
+                        "exception_id": exception.exception_id,
+                        "shipment_id": shipment_id,
+                        "exception_type": exception.exception_type,
+                        "description": exception.description,
+                        "severity": exception.severity
+                    }
+                    investigation_context = {
+                        "investigation_id": investigation_record.investigation_id,
+                        "summary": investigation_record.summary,
+                        "possible_cause": investigation_record.possible_cause,
+                        "affected_process": investigation_record.affected_process,
+                        "urgency": investigation_record.urgency,
+                        "recommended_next": investigation_record.recommended_next
+                    }
+                    risk_context = {
+                        "risk_id": risk_record.risk_id,
+                        "risk_score": float(risk_record.risk_score),
+                        "risk_level": risk_record.risk_level,
+                        "explanation": risk_record.explanation
+                    }
+                    proposed_rule = RESOLUTION_RULES.get(
+                        exception.exception_type, {}
+                    )
+                    proposed_action = {
+                        "action_type": proposed_rule.get("action_type"),
+                        "description": proposed_rule.get("description"),
+                        "requires_human_approval": True
+                    }
+
+                    # End the read transaction before external LLM work.
+                    db.rollback()
+                    decision_advisory = assess_resolution_plan(
+                        exception_data=exception_context,
+                        investigation_data=investigation_context,
+                        risk_data=risk_context,
+                        proposed_action=proposed_action
+                    )
+
+                # The planner remains authoritative. If context was missing,
+                # it will create a rule-based proposal marked for manual review.
+                db.rollback()
                 plan_result = create_resolution_plan(
                     db=db,
                     exception_id=exception_id,
-                    triggered_by=triggered_by
+                    triggered_by=triggered_by,
+                    decision_advisory=decision_advisory
                 )
 
                 action = (
