@@ -28,6 +28,9 @@ class CargoPilotState(TypedDict):
     # LLM investigation analysis
     llm_analysis_results: List[dict]
 
+    # LLM-selected read-only diagnostic tool results
+    tool_selection_results: List[dict]
+
     # Risk assessment results
     risk_assessment_results: List[dict]
 
