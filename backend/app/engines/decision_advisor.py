@@ -71,10 +71,16 @@ def parse_decision_advisory(response: str) -> dict:
     rationale = payload["rationale"]
     missing_information = payload["missing_information"]
 
-    if recommendation not in VALID_RECOMMENDATIONS:
+    if (
+        not isinstance(recommendation, str)
+        or recommendation not in VALID_RECOMMENDATIONS
+    ):
         raise ValueError("Decision advisory recommendation is not allowed.")
 
-    if confidence not in VALID_CONFIDENCE_LEVELS:
+    if (
+        not isinstance(confidence, str)
+        or confidence not in VALID_CONFIDENCE_LEVELS
+    ):
         raise ValueError("Decision advisory confidence level is invalid.")
 
     if not isinstance(rationale, str) or not rationale.strip():
