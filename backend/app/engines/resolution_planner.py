@@ -22,6 +22,52 @@ from app.models import (
 # RESOLUTION RULES
 # ==================================================
 
+RECOVERY_ACTION_OPTIONS = {
+    "DOCUMENT_MISMATCH": {
+        "REQUEST_DOCUMENT_CORRECTION": "Request corrected shipping documents from the responsible stakeholder.",
+        "NOTIFY_OPERATIONS_OFFICER": "Notify the operations officer to coordinate document discrepancy resolution.",
+        "ESCALATE_TO_MANAGER": "Escalate the unresolved document discrepancy for managerial review.",
+    },
+    "MISSING_DOCUMENT": {
+        "REQUEST_MISSING_DOCUMENT": "Request the missing mandatory shipping document.",
+        "NOTIFY_OPERATIONS_OFFICER": "Notify the operations officer to obtain the missing document.",
+        "ESCALATE_TO_MANAGER": "Escalate the missing-document case for managerial review.",
+    },
+    "SHIPMENT_DELAY": {
+        "NOTIFY_OPERATIONS_OFFICER": "Notify the operations officer to investigate the shipment delay.",
+        "SEND_FOLLOW_UP_EMAIL": "Prepare a follow-up request to the responsible stakeholder.",
+        "ESCALATE_TO_MANAGER": "Escalate the shipment delay for managerial intervention.",
+    },
+    "MISSING_MILESTONE": {
+        "NOTIFY_OPERATIONS_OFFICER": "Notify operations to confirm the missing shipment milestone.",
+        "SEND_FOLLOW_UP_EMAIL": "Prepare a milestone confirmation request for the responsible stakeholder.",
+        "ESCALATE_TO_MANAGER": "Escalate the missing milestone for managerial review.",
+    },
+    "CUSTOMS_HOLD": {
+        "ESCALATE_TO_MANAGER": "Escalate the customs hold for managerial review.",
+        "NOTIFY_OPERATIONS_OFFICER": "Notify operations to obtain the customs hold details.",
+    },
+    "STAKEHOLDER_RESPONSE_DELAY": {
+        "SEND_FOLLOW_UP_EMAIL": "Prepare a follow-up request to the responsible stakeholder.",
+        "NOTIFY_OPERATIONS_OFFICER": "Notify operations that stakeholder response is overdue.",
+        "ESCALATE_TO_MANAGER": "Escalate the delayed stakeholder response for managerial review.",
+    },
+    "CONTAINER_NOT_DISCHARGED": {
+        "ESCALATE_TO_MANAGER": "Escalate the container discharge issue to management.",
+        "NOTIFY_OPERATIONS_OFFICER": "Notify operations to confirm container discharge status.",
+    },
+    "DAMAGE_SHORTAGE": {
+        "ESCALATE_TO_MANAGER": "Escalate the reported cargo damage or shortage for inspection and claims review.",
+        "NOTIFY_OPERATIONS_OFFICER": "Notify operations to coordinate cargo inspection and quantity reconciliation.",
+    },
+    "ROLLED_CARGO": {
+        "NOTIFY_OPERATIONS_OFFICER": "Notify operations to confirm the roll-over reason and next available sailing.",
+        "SEND_FOLLOW_UP_EMAIL": "Prepare a carrier follow-up requesting the roll-over reason and next sailing details.",
+        "ESCALATE_TO_MANAGER": "Escalate the rolled-cargo case for managerial review.",
+    },
+}
+
+
 RESOLUTION_RULES = {
 
     "DOCUMENT_MISMATCH": {
@@ -180,7 +226,8 @@ def create_resolution_plan(
     db: Session,
     exception_id: int,
     triggered_by: int = None,
-    decision_advisory: dict = None
+    decision_advisory: dict = None,
+    recovery_action_type: str = None
 ):
 
     started_at = datetime.now()
@@ -320,6 +367,20 @@ def create_resolution_plan(
                 f"No resolution rule defined for "
                 f"{exception.exception_type}"
             )
+
+        if recovery_action_type is not None:
+            allowed_recovery_actions = RECOVERY_ACTION_OPTIONS.get(
+                exception.exception_type, {}
+            )
+            if recovery_action_type not in allowed_recovery_actions:
+                raise ValueError(
+                    "The proposed recovery action is not permitted "
+                    "for this exception type."
+                )
+            rule = {
+                "action_type": recovery_action_type,
+                "description": allowed_recovery_actions[recovery_action_type],
+            }
 
         # ------------------------------------------
         # 7. DETERMINE PRIORITY
