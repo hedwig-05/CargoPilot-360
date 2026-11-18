@@ -222,9 +222,9 @@ def parse_recovery_alternative(response: str, allowed_action_types: list) -> dic
     rationale = payload["rationale"]
     missing = payload["missing_information"]
 
-    if decision not in VALID_RECOVERY_DECISIONS:
+    if not isinstance(decision, str) or decision not in VALID_RECOVERY_DECISIONS:
         raise ValueError("Recovery decision is not permitted.")
-    if confidence not in VALID_CONFIDENCE_LEVELS:
+    if not isinstance(confidence, str) or confidence not in VALID_CONFIDENCE_LEVELS:
         raise ValueError("Recovery confidence is invalid.")
     if not isinstance(rationale, str) or not rationale.strip() or len(rationale) > 2000:
         raise ValueError("Recovery rationale is invalid.")
