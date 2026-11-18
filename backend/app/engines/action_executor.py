@@ -877,7 +877,8 @@ def execute_action(
             run.output_data = {
                 "execution_id": execution.execution_id,
                 "action_id": action.action_id,
-                "error": error_message
+                "error": error_message,
+                "recovery_analysis": recovery_analysis
             }
 
             run.latency_ms = int(
@@ -893,7 +894,8 @@ def execute_action(
                 run=run,
                 execution=execution,
                 result={
-                    "error": error_message
+                    "error": error_message,
+                    "recovery_analysis": recovery_analysis
                 },
                 audit_action="ACTION_EXECUTION_FAILED"
             )
@@ -925,7 +927,8 @@ def execute_action(
                 "attempt_no": execution.attempt_no,
                 "execution_status": action.execution_status,
                 "dependent_workflows_updated": dependent_count,
-                "error": error_message
+                "error": error_message,
+                "recovery_analysis": recovery_analysis
             }
 
     except Exception:
