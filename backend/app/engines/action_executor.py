@@ -836,7 +836,23 @@ def execute_action(
 
             error_message = str(error)
 
+            from app.engines.action_recovery import analyze_action_failure
+
+            prior_attempts = (
+                db.query(ActionExecution)
+                .filter(ActionExecution.action_id == action.action_id)
+                .count()
+            )
+            recovery_analysis = analyze_action_failure(
+                error=error,
+                attempt_no=prior_attempts,
+                side_effect_state="NOT_COMMITTED",
+            )
+
             execution.status = "FAILED"
+            execution.response_data = {
+                "failure_analysis": recovery_analysis
+            }
 
             execution.error_message = error_message
 
