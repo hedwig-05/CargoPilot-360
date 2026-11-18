@@ -355,10 +355,15 @@ def request_manager_alternative_action(
             "Manual intervention is required."
         )
 
-    allowed = RECOVERY_ACTION_OPTIONS.get(exception.exception_type, {})
+    allowed = dict(
+        RECOVERY_ACTION_OPTIONS.get(exception.exception_type, {})
+    )
+    # An alternative must not repeat the exact action type that just failed.
+    allowed.pop(action.action_type, None)
     if not allowed:
         raise ValueError(
-            "No safe alternative actions are configured for this exception type."
+            "No distinct safe alternative actions are configured for this "
+            "exception type and failed action."
         )
 
     # Copy only the facts needed by the advisor before releasing DB locks.
