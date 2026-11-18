@@ -2628,3 +2628,55 @@ body {
     flex-wrap: wrap;
   }
 }
+
+
+.shipment-supervisor-control {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 18px;
+  margin-top: 20px;
+  padding: 16px;
+  background: var(--surface-secondary);
+  border: 1px solid var(--border-color);
+  border-radius: 5px;
+}
+
+.shipment-supervisor-control strong {
+  display: block;
+  color: var(--text-primary);
+  font-size: 13px;
+  font-weight: 750;
+}
+
+.shipment-supervisor-control p {
+  max-width: 620px;
+  margin: 6px 0 0;
+  color: var(--text-secondary);
+  font-size: 11px;
+  line-height: 1.6;
+}
+
+.shipment-supervisor-control .primary-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+.shipment-supervisor-control .primary-button:disabled {
+  opacity: .55;
+  cursor: not-allowed;
+}
+
+@media (max-width: 680px) {
+  .shipment-supervisor-control {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .shipment-supervisor-control .primary-button {
+    width: 100%;
+  }
+}
