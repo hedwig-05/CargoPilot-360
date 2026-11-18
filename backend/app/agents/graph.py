@@ -31,6 +31,12 @@ from app.engines.resolution_planner import create_resolution_plan
 
 from app.llm.router import create_llm_router
 
+from app.agents.tool_registry import (
+    get_tool_catalog,
+    execute_registered_tool,
+    parse_tool_selection
+)
+
 
 # ==========================================================
 # HELPER: UPDATE AGENT RUN
@@ -471,6 +477,162 @@ def investigation_node(state: CargoPilotState):
         return {
             "current_stage": "INVESTIGATION_FAILED",
             "workflow_status": "FAILED",
+            "errors": state.get("errors", []) + [str(error)]
+        }
+
+    finally:
+        db.close()
+
+
+# ==========================================================
+# LLM-CONTROLLED TOOL SELECTION NODE
+# ==========================================================
+
+def tool_selection_node(state: CargoPilotState):
+
+    print("\n========== TOOL SELECTION NODE STARTED ==========")
+
+    db = SessionLocal()
+    selection_results = []
+    router = None
+
+    try:
+        workflow_id = state["workflow_id"]
+        supervisor_run_id = state["supervisor_run_id"]
+        shipment_id = state["shipment_id"]
+
+        workflow = (
+            db.query(AgentWorkflow)
+            .filter(AgentWorkflow.workflow_id == workflow_id)
+            .first()
+        )
+        if workflow:
+            workflow.current_node = "tool_selection"
+        db.commit()
+
+        catalog = get_tool_catalog()
+
+        for investigation in state.get("investigation_results", []):
+            exception_id = investigation.get("exception_id")
+            exception_data = next(
+                (
+                    item for item in state.get("exception_details", [])
+                    if item["exception_id"] == exception_id
+                ),
+                {}
+            )
+
+            selection_run = create_child_run(
+                db=db,
+                workflow_id=workflow_id,
+                parent_run_id=supervisor_run_id,
+                agent_type="LLM",
+                node_name="tool_selection",
+                input_data={
+                    "exception_id": exception_id,
+                    "shipment_id": shipment_id,
+                    "tool_catalog": catalog,
+                    "selection_policy": "allowlisted-read-only-v1"
+                }
+            )
+            db.commit()
+            db.refresh(selection_run)
+            selection_run_id = selection_run.run_id
+
+            try:
+                if router is None:
+                    router = create_llm_router()
+
+                prompt = f"""
+Select one diagnostic read-only tool for CargoPilot 360, or "none".
+
+EXCEPTION:
+{exception_data}
+
+INVESTIGATION FINDINGS:
+{{
+    "summary": {investigation.get("summary")},
+    "possible_cause": {investigation.get("possible_cause")},
+    "affected_process": {investigation.get("affected_process")},
+    "recommended_next": {investigation.get("recommended_next")},
+    "evidence_count": {investigation.get("evidence_count")}
+}}
+
+APPROVED TOOL CATALOG:
+{catalog}
+
+Return exactly one JSON object with string keys "tool_name" and "rationale".
+tool_name must be one catalog name or "none".
+Do not invent tools, arguments, identifiers or database queries.
+Do not request write, approval, notification or execution operations.
+Do not include Markdown or text outside the JSON object.
+"""
+                llm_result = router.generate_with_metadata(prompt)
+                selection = parse_tool_selection(llm_result["content"])
+
+                if selection["tool_name"] == "none":
+                    tool_output = {
+                        "tool_name": "none",
+                        "read_only": True,
+                        "result": None
+                    }
+                else:
+                    tool_output = execute_registered_tool(
+                        db=db,
+                        tool_name=selection["tool_name"],
+                        shipment_id=shipment_id
+                    )
+
+                run_output = {
+                    "exception_id": exception_id,
+                    "selection": selection,
+                    "tool_output": tool_output,
+                    "provider_name": llm_result["provider_name"],
+                    "model_name": llm_result["model_name"],
+                    "latency_ms": llm_result["latency_ms"],
+                    "fallback_used": llm_result["fallback_used"]
+                }
+                update_agent_run(
+                    db, selection_run_id, "COMPLETED",
+                    output_data=run_output
+                )
+                db.commit()
+                selection_results.append(run_output)
+
+            except Exception as error:
+                db.rollback()
+                failed_run = (
+                    db.query(AgentRun)
+                    .filter(AgentRun.run_id == selection_run_id)
+                    .first()
+                )
+                if failed_run:
+                    failed_run.execution_status = "FAILED"
+                    failed_run.error_message = str(error)
+                    failed_run.output_data = {"error": str(error)}
+                    failed_run.completed_at = datetime.now()
+                    db.commit()
+
+                selection_results.append({
+                    "exception_id": exception_id,
+                    "selection_status": "FAILED",
+                    "tool_output": None,
+                    "error": str(error)
+                })
+
+        return {
+            "current_stage": "TOOL_SELECTION",
+            "workflow_status": "RUNNING",
+            "tool_selection_results": selection_results
+        }
+
+    except Exception as error:
+        db.rollback()
+        print("\nTool selection node failed:", str(error))
+        return {
+            "current_stage": "TOOL_SELECTION_FAILED",
+            "workflow_status": "FAILED",
+            "tool_selection_results": selection_results,
             "errors": state.get("errors", []) + [str(error)]
         }
 
@@ -1085,7 +1247,7 @@ def route_after_investigation(state: CargoPilotState):
     if state["workflow_status"] == "FAILED":
         return "finish"
 
-    return "llm_analysis"
+    return "tool_selection"
 
 
 def route_after_risk_assessment(state: CargoPilotState):
@@ -1230,6 +1392,8 @@ builder.add_node("monitoring", monitoring_node)
 
 builder.add_node("investigation", investigation_node)
 
+builder.add_node("tool_selection", tool_selection_node)
+
 builder.add_node("llm_analysis", llm_analysis_node)
 
 builder.add_node("risk_assessment", risk_assessment_node)
@@ -1259,10 +1423,12 @@ builder.add_conditional_edges(
     "investigation",
     route_after_investigation,
     {
-        "llm_analysis": "llm_analysis",
+        "tool_selection": "tool_selection",
         "finish": "finish"
     }
 )
+
+builder.add_edge("tool_selection", "llm_analysis")
 
 builder.add_edge("llm_analysis", "risk_assessment")
 
