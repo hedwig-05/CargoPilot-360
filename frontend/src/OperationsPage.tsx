@@ -5,6 +5,7 @@ import {
   FileSearch, Filter, RefreshCw, Search, ShieldAlert, Workflow, X
 } from 'lucide-react'
 import './OperationsPages.css'
+import AIOperationsPage from './AIOperationsPage'
 
 const API_BASE_URL =
   import.meta.env.VITE_API_BASE_URL || 'http://127.0.0.1:8000'
@@ -545,7 +546,7 @@ function DetailValue({
 }
 
 
-export default function OperationsPage({
+function OperationsPageContent({
   page,
   shipments = []
 }: Props) {
@@ -1361,4 +1362,10 @@ export default function OperationsPage({
       )}
     </main>
   )
+}
+
+
+export default function OperationsPage(props: Props) {
+  if (props.page === 'AI Operations') return <AIOperationsPage />
+  return <OperationsPageContent {...props} />
 }
