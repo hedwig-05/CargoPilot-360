@@ -191,6 +191,11 @@ def get_action_recovery_review(
                 == "RETRY_CANDIDATE"
                 if run else False
             ),
+            "alternative_recovery_allowed": (
+                ((run.output_data or {}).get("recovery_analysis") or {}).get("recovery_decision")
+                == "REPLAN_REQUIRED"
+                if run else False
+            ),
             "plan_id": action.plan_id,
             "workflow_id": action.workflow_id
         }
