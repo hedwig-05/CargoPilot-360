@@ -7,6 +7,8 @@ from sqlalchemy.orm import Session
 
 from app.engines.exception_lifecycle import transition_exception_status
 
+from app.engines.decision_advisor import assess_resolution_plan
+
 from app.models import (
     Exception as ShipmentException,
     AgentWorkflow,
@@ -386,6 +388,53 @@ def create_resolution_plan(
             risk
         )
 
+        # The LLM reviews the rule-generated proposal but cannot
+        # change the action, priority, or human approval requirement.
+        decision_advisory = assess_resolution_plan(
+            exception_data={
+                "exception_id": exception.exception_id,
+                "shipment_id": exception.shipment_id,
+                "exception_type": exception.exception_type,
+                "description": exception.description,
+                "severity": exception.severity
+            },
+            investigation_data={
+                "investigation_id": investigation.investigation_id,
+                "summary": investigation.summary,
+                "possible_cause": investigation.possible_cause,
+                "affected_process": investigation.affected_process,
+                "urgency": investigation.urgency,
+                "recommended_next": investigation.recommended_next
+            },
+            risk_data={
+                "risk_id": risk.risk_id,
+                "risk_score": float(risk.risk_score),
+                "risk_level": risk.risk_level,
+                "explanation": risk.explanation
+            },
+            proposed_action={
+                "action_type": rule["action_type"],
+                "description": rule["description"],
+                "priority": priority,
+                "requires_human_approval": True
+            }
+        )
+
+        reasoning += (
+            "\n\nAI DECISION ADVISORY (not an approval): "
+            + decision_advisory["recommendation"]
+            + " | Confidence: "
+            + decision_advisory["confidence"]
+            + " | "
+            + decision_advisory["rationale"]
+        )
+
+        if decision_advisory["missing_information"]:
+            reasoning += (
+                " | Information to verify: "
+                + "; ".join(decision_advisory["missing_information"])
+            )
+
         # ------------------------------------------
         # 11. DETERMINE PLAN VERSION
         # ------------------------------------------
@@ -464,7 +513,9 @@ def create_resolution_plan(
             "action_status": "PENDING",
             "investigation_id": investigation.investigation_id,
             "risk_id": risk.risk_id,
-            "workflow_id": workflow.workflow_id
+            "workflow_id": workflow.workflow_id,
+            "decision_advisory": decision_advisory,
+            "human_approval_required": True
         }
 
         decision_run.execution_status = "COMPLETED"
@@ -512,7 +563,9 @@ def create_resolution_plan(
             "action_type": action.action_type,
             "approval_status": action.approval_status,
             "execution_status": action.execution_status,
-            "reasoning": reasoning
+            "reasoning": reasoning,
+            "decision_advisory": decision_advisory,
+            "human_approval_required": True
         }
 
     except Exception:
