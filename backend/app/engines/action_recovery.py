@@ -106,6 +106,8 @@ def request_manager_authorized_retry(
         AgentRun,
         AuditLog,
         ResolutionPlan,
+        Investigation,
+        RiskAssessment,
         Exception as ShipmentException,
     )
     from app.engines.resolution_planner import create_resolution_plan
@@ -355,6 +357,33 @@ def request_manager_alternative_action(
             "Manual intervention is required."
         )
 
+    investigation = (
+        db.query(Investigation)
+        .filter(
+            Investigation.exception_id == exception.exception_id,
+            Investigation.status == "COMPLETED",
+        )
+        .order_by(
+            Investigation.created_at.desc(),
+            Investigation.investigation_id.desc(),
+        )
+        .first()
+    )
+    risk = None
+    if investigation is not None:
+        risk = (
+            db.query(RiskAssessment)
+            .filter(
+                RiskAssessment.workflow_id == investigation.workflow_id,
+                RiskAssessment.shipment_id == exception.shipment_id,
+            )
+            .order_by(
+                RiskAssessment.assessed_at.desc(),
+                RiskAssessment.risk_id.desc(),
+            )
+            .first()
+        )
+
     allowed = dict(
         RECOVERY_ACTION_OPTIONS.get(exception.exception_type, {})
     )
@@ -383,6 +412,23 @@ def request_manager_alternative_action(
         "failure_reason": recovery_analysis.get("reason"),
         "side_effect_state": recovery_analysis.get("side_effect_state"),
         "attempt_no": latest_execution.attempt_no,
+        "investigation": (
+            {
+                "summary": investigation.summary,
+                "possible_cause": investigation.possible_cause,
+                "affected_process": investigation.affected_process,
+                "recommended_next": investigation.recommended_next,
+            }
+            if investigation else None
+        ),
+        "risk_assessment": (
+            {
+                "risk_score": float(risk.risk_score),
+                "risk_level": risk.risk_level,
+                "explanation": risk.explanation,
+            }
+            if risk else None
+        ),
     }
     exception_id = exception.exception_id
     failed_plan_id = old_plan.plan_id
