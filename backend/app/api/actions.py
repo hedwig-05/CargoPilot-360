@@ -32,6 +32,7 @@ from app.engines.action_executor import (
 )
 
 from app.engines.action_recovery import (
+    MAX_AUTOMATIC_ATTEMPTS,
     request_manager_authorized_retry,
     request_manager_alternative_action
 )
@@ -152,7 +153,7 @@ def get_action_recovery_review(
     )
 
     records = (
-        db.query(Action, ActionExecution, AgentRun)
+        db.query(Action, ActionExecution, AgentRun, ResolutionPlan)
         .join(
             ActionExecution,
             ActionExecution.action_id == Action.action_id
@@ -165,9 +166,21 @@ def get_action_recovery_review(
                 == ActionExecution.attempt_no
             )
         )
+        .join(ResolutionPlan, ResolutionPlan.plan_id == Action.plan_id)
         .outerjoin(AgentRun, AgentRun.run_id == ActionExecution.run_id)
         .filter(Action.execution_status == "FAILED")
         .order_by(ActionExecution.completed_at.desc())
+        .all()
+    )
+
+    attempt_counts = dict(
+        db.query(
+            ResolutionPlan.exception_id,
+            func.count(ActionExecution.execution_id)
+        )
+        .join(Action, Action.plan_id == ResolutionPlan.plan_id)
+        .join(ActionExecution, ActionExecution.action_id == Action.action_id)
+        .group_by(ResolutionPlan.exception_id)
         .all()
     )
 
@@ -187,19 +200,30 @@ def get_action_recovery_review(
                 if run else None
             ),
             "recovery_request_allowed": (
-                ((run.output_data or {}).get("recovery_analysis") or {}).get("recovery_decision")
-                == "RETRY_CANDIDATE"
+                (
+                    ((run.output_data or {}).get("recovery_analysis") or {}).get("recovery_decision")
+                    == "RETRY_CANDIDATE"
+                    and ((run.output_data or {}).get("recovery_analysis") or {}).get("retry_allowed") is True
+                    and ((run.output_data or {}).get("recovery_analysis") or {}).get("side_effect_state") == "NOT_COMMITTED"
+                    and attempt_counts.get(plan.exception_id, 0) < MAX_AUTOMATIC_ATTEMPTS
+                )
                 if run else False
             ),
             "alternative_recovery_allowed": (
-                ((run.output_data or {}).get("recovery_analysis") or {}).get("recovery_decision")
-                == "REPLAN_REQUIRED"
+                (
+                    ((run.output_data or {}).get("recovery_analysis") or {}).get("recovery_decision")
+                    == "REPLAN_REQUIRED"
+                    and ((run.output_data or {}).get("recovery_analysis") or {}).get("side_effect_state") == "NOT_COMMITTED"
+                    and attempt_counts.get(plan.exception_id, 0) < MAX_AUTOMATIC_ATTEMPTS
+                )
                 if run else False
             ),
             "plan_id": action.plan_id,
-            "workflow_id": action.workflow_id
+            "workflow_id": action.workflow_id,
+            "exception_id": plan.exception_id,
+            "total_exception_attempts": attempt_counts.get(plan.exception_id, 0)
         }
-        for action, execution, run in records
+        for action, execution, run, plan in records
     ]
 
 
