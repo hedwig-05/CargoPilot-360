@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import { Activity, AlertTriangle, Clock3, RefreshCw, Workflow } from 'lucide-react'
+import { Activity, AlertTriangle, RefreshCw, Workflow } from 'lucide-react'
 import './OperationsPages.css'
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://127.0.0.1:8000'
@@ -52,11 +52,11 @@ export default function AIOperationsPage() {
   const load = useCallback(async () => {
     setLoading(true)
     setError('')
-    const [workflowResponse, runResponse] = await Promise.all([
-      fetch(`${API_BASE_URL}/api/agent-workflows`, { headers: headers() }),
-      fetch(`${API_BASE_URL}/api/agent-runs`, { headers: headers() })
-    ])
     try {
+      const [workflowResponse, runResponse] = await Promise.all([
+        fetch(`${API_BASE_URL}/api/agent-workflows`, { headers: headers() }),
+        fetch(`${API_BASE_URL}/api/agent-runs`, { headers: headers() })
+      ])
       if (!workflowResponse.ok) throw new Error(`Workflows: ${workflowResponse.status} ${workflowResponse.statusText}`)
       if (!runResponse.ok) throw new Error(`Agent runs: ${runResponse.status} ${runResponse.statusText}`)
       const workflowData = await workflowResponse.json()
