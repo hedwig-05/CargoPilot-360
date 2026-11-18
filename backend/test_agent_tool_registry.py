@@ -55,3 +55,32 @@ def test_tool_selection_rejects_unregistered_tool():
 def test_tool_selection_rejects_non_json_response():
     with pytest.raises(ValueError, match="valid JSON"):
         parse_tool_selection("I think we should inspect the shipment.")
+
+
+def test_tool_selection_accepts_json_code_fence():
+    result = parse_tool_selection(
+        chr(96) * 3 + "json\n" +
+        '{"tool_name": "none", "rationale": "No extra lookup is needed."}\n' +
+        chr(96) * 3
+    )
+
+    assert result["tool_name"] == "none"
+
+
+def test_tool_selection_rejects_non_json_code_fence():
+    response = (
+        chr(96) * 3 + "python\n" +
+        '{"tool_name": "none", "rationale": "Not accepted."}\n' +
+        chr(96) * 3
+    )
+    with pytest.raises(ValueError, match="must be JSON"):
+        parse_tool_selection(response)
+
+
+def test_tool_execution_rejects_boolean_shipment_id():
+    with pytest.raises(ValueError, match="valid shipment_id"):
+        execute_registered_tool(
+            db=None,
+            tool_name="get_shipment_event_timeline",
+            shipment_id=True,
+        )
