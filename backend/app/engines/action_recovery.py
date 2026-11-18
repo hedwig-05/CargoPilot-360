@@ -209,7 +209,7 @@ def request_manager_authorized_retry(
     new_plan.supersedes_plan_id = old_plan.plan_id
     new_plan.reasoning = (
         (new_plan.reasoning or "")
-        + "\\n\\nRECOVERY CONTEXT: This is a fresh, manager-requested "
+        + "\n\nRECOVERY CONTEXT: This is a fresh, manager-requested "
         "proposal following a failed transient action. The previous action "
         f"was {action.action_id}; its execution history has been preserved. "
         "This replacement requires a separate human approval."
