@@ -180,5 +180,5 @@ Do not include Markdown or text outside the JSON object."""
                 "The rule-based proposal is retained for manual assessment."
             ),
             "missing_information": [],
-            "error": str(error)
+            "error_code": "DECISION_ADVISOR_UNAVAILABLE"
         }
