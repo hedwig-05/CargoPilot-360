@@ -479,14 +479,6 @@ def resolve_exception(
     commit: bool = True,
     operator_id: int = None
 ):
-    # Retained for backward compatibility: False still blocks an explicit
-    # unverified request, but True is not accepted as proof of verification.
-    if not verified:
-        raise ValueError("Exception cannot be resolved without verification.")
-
-    if not resolution_notes or not resolution_notes.strip():
-        raise ValueError("Resolution notes are required.")
-
     try:
         exception = (
             db.query(ShipmentException)
@@ -498,7 +490,8 @@ def resolve_exception(
         if exception is None:
             raise ValueError(f"Exception ID {exception_id} not found.")
 
-        # Preserve the existing idempotent behaviour for terminal exceptions.
+        # Preserve idempotent success for terminal exceptions before checking
+        # request flags or notes: no second resolution is being performed.
         if exception.status in ("RESOLVED", "CLOSED"):
             return {
                 "success": True,
@@ -506,6 +499,14 @@ def resolve_exception(
                 "exception_id": exception_id,
                 "status": exception.status
             }
+
+        # Retained for backward compatibility: False still blocks an explicit
+        # unverified request, but True is not accepted as proof of verification.
+        if not verified:
+            raise ValueError("Exception cannot be resolved without verification.")
+
+        if not resolution_notes or not resolution_notes.strip():
+            raise ValueError("Resolution notes are required.")
 
         # Read the latest verification for this exception. Do not filter by
         # shipment or status before ordering: a newer mismatched or
