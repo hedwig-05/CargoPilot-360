@@ -16,7 +16,9 @@ from app.models import (
     AgentWorkflow,
     AgentRun,
     ResolutionPlan,
-    Action
+    Action,
+    Investigation,
+    RiskAssessment
 )
 
 from app.engines.exception_detection import (
@@ -29,6 +31,8 @@ from app.engines.investigation import investigate_exception
 from app.engines.risk_assessment import assess_shipment_risk
 
 from app.engines.resolution_planner import create_resolution_plan
+from app.engines.decision_advisor import assess_resolution_plan
+from app.engines.resolution_planner import RESOLUTION_RULES
 
 from app.llm.router import create_llm_router
 
@@ -1281,9 +1285,91 @@ def decision_node(state: CargoPilotState):
 
             else:
 
+                # Gather advisory context before the planner acquires
+                # its exception row lock. This avoids holding database
+                # locks while waiting for an external LLM response.
+                exception_record = (
+                    db.query(ShipmentException)
+                    .filter(
+                        ShipmentException.exception_id == exception_id
+                    )
+                    .first()
+                )
+
+                investigation_record = (
+                    db.query(Investigation)
+                    .filter(
+                        Investigation.exception_id == exception_id,
+                        Investigation.status == "COMPLETED"
+                    )
+                    .order_by(
+                        Investigation.created_at.desc(),
+                        Investigation.investigation_id.desc()
+                    )
+                    .first()
+                )
+
+                decision_advisory = None
+
+                if exception_record and investigation_record:
+                    risk_record = (
+                        db.query(RiskAssessment)
+                        .filter(
+                            RiskAssessment.workflow_id == investigation_record.workflow_id,
+                            RiskAssessment.shipment_id == exception_record.shipment_id
+                        )
+                        .order_by(
+                            RiskAssessment.assessed_at.desc(),
+                            RiskAssessment.risk_id.desc()
+                        )
+                        .first()
+                    )
+
+                    if risk_record:
+                        exception_context = {
+                            "exception_id": exception_record.exception_id,
+                            "shipment_id": exception_record.shipment_id,
+                            "exception_type": exception_record.exception_type,
+                            "description": exception_record.description,
+                            "severity": exception_record.severity
+                        }
+                        investigation_context = {
+                            "investigation_id": investigation_record.investigation_id,
+                            "summary": investigation_record.summary,
+                            "possible_cause": investigation_record.possible_cause,
+                            "affected_process": investigation_record.affected_process,
+                            "urgency": investigation_record.urgency,
+                            "recommended_next": investigation_record.recommended_next
+                        }
+                        risk_context = {
+                            "risk_id": risk_record.risk_id,
+                            "risk_score": float(risk_record.risk_score),
+                            "risk_level": risk_record.risk_level,
+                            "explanation": risk_record.explanation
+                        }
+
+                        # End the read transaction before calling the LLM.
+                        db.rollback()
+
+                        decision_advisory = assess_resolution_plan(
+                            exception_data=exception_context,
+                            investigation_data=investigation_context,
+                            risk_data=risk_context,
+                            proposed_action={
+                                "action_type": RESOLUTION_RULES.get(
+                                    exception_record.exception_type, {}
+                                ).get("action_type"),
+                                "description": RESOLUTION_RULES.get(
+                                    exception_record.exception_type, {}
+                                ).get("description"),
+                                "requires_human_approval": True
+                            }
+                        )
+
                 result = create_resolution_plan(
                     db=db,
-                    exception_id=exception_id
+                    exception_id=exception_id,
+                    decision_advisory=decision_advisory
                 )
 
                 result["reused_existing"] = False
