@@ -27,6 +27,7 @@ import {
 } from 'lucide-react'
 import LoginPage from './LoginPage'
 import DocumentsPage from './DocumentsPage'
+import ActionControlPage from './ActionControlPage'
 import OperationsPage from './OperationsPage'
 import './App.css'
 
@@ -1455,13 +1456,19 @@ function App() {
             <DocumentsPage shipments={shipments} />
           )}
 
-          {/* ALL EIGHT OPERATIONS MODULES */}
-          {operationsPages.includes(activePage as OperationsPageName) && (
-            <OperationsPage
-              page={activePage as OperationsPageName}
-              shipments={shipments}
-            />
+          {/* MANAGER ACTION APPROVAL AND RECOVERY WORKSPACE */}
+          {activePage === 'Actions & Approvals' && (
+            <ActionControlPage currentUser={currentUser} />
           )}
+
+          {/* REMAINING OPERATIONS MODULES */}
+          {operationsPages.includes(activePage as OperationsPageName) &&
+            activePage !== 'Actions & Approvals' && (
+              <OperationsPage
+                page={activePage as OperationsPageName}
+                shipments={shipments}
+              />
+            )}
 
           {/* SETTINGS */}
           {activePage === 'Settings' && (
