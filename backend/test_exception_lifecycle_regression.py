@@ -109,7 +109,7 @@ class ExceptionLifecycleRegressionTests(unittest.TestCase):
         self.db.flush()
 
         run = AgentRun(
-            run_public_id=f"TEST-RUN-{unique_id}",
+            run_public_id=f"TR-{unique_id}",
             workflow_id=workflow.workflow_id,
             step_no=1,
             agent_type="VERIFICATION",
