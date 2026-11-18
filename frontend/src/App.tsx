@@ -205,6 +205,11 @@ function App() {
   const [riskFilter, setRiskFilter] = useState('ALL')
   const [selectedShipment, setSelectedShipment] =
     useState<Shipment | null>(null)
+  const [isSupervisorRunning, setIsSupervisorRunning] = useState(false)
+  const [supervisorFeedback, setSupervisorFeedback] = useState<{
+    tone: 'success' | 'error'
+    message: string
+  } | null>(null)
 
   useEffect(() => {
     document.documentElement.setAttribute('data-theme', theme)
@@ -498,6 +503,54 @@ function App() {
       )
     } finally {
       setIsShipmentsLoading(false)
+    }
+  }
+
+  const runShipmentSupervisor = async () => {
+    if (!selectedShipment || !currentUser || !['ADMIN', 'MANAGER'].includes(currentUser.role)) {
+      return
+    }
+
+    const token = sessionStorage.getItem('cargopilot-token')
+    if (!token) {
+      setSupervisorFeedback({
+        tone: 'error',
+        message: 'Your session has expired. Sign in again before starting a workflow.',
+      })
+      return
+    }
+
+    setIsSupervisorRunning(true)
+    setSupervisorFeedback(null)
+
+    try {
+      const response = await fetch(
+        `${API_BASE_URL}/api/supervisor/shipments/${selectedShipment.shipment_id}/run`,
+        {
+          method: 'POST',
+          headers: {
+            Authorization: `Bearer ${token}`,
+          },
+        },
+      )
+      const body = await response.json().catch(() => ({}))
+
+      if (!response.ok) {
+        throw new Error(body.detail || 'Could not start the shipment supervisor.')
+      }
+
+      const status = formatLabel(String(body.workflow_status || 'RUNNING'))
+      setSupervisorFeedback({
+        tone: body.success === false ? 'error' : 'success',
+        message: `${body.message || 'Supervisor workflow started.'} Workflow #${body.workflow_id} · ${status}.`,
+      })
+    } catch (error) {
+      setSupervisorFeedback({
+        tone: 'error',
+        message: error instanceof Error ? error.message : 'Supervisor execution failed.',
+      })
+    } finally {
+      setIsSupervisorRunning(false)
     }
   }
 
@@ -1446,6 +1499,32 @@ function App() {
                       </strong>
                     </div>
                   </div>
+
+                  {currentUser && ['ADMIN', 'MANAGER'].includes(currentUser.role) && (
+                    <div className="shipment-supervisor-control">
+                      <div>
+                        <strong>Run CargoPilot Supervisor</strong>
+                        <p>Process documents, investigate exceptions, assess risk and prepare actions for manager approval.</p>
+                      </div>
+                      <button
+                        className="primary-button"
+                        onClick={() => void runShipmentSupervisor()}
+                        disabled={isSupervisorRunning || ['DELIVERED', 'CANCELLED'].includes(selectedShipment.status)}
+                      >
+                        <RefreshCw size={15} className={isSupervisorRunning ? 'refresh-spinning' : ''} />
+                        {isSupervisorRunning ? 'Running workflow...' : 'Run Supervisor'}
+                      </button>
+                    </div>
+                  )}
+
+                  {supervisorFeedback && (
+                    <div className={`document-alert document-alert-${supervisorFeedback.tone}`}>
+                      <span>{supervisorFeedback.message}</span>
+                      <button onClick={() => setSupervisorFeedback(null)} aria-label="Dismiss supervisor message">
+                        <X size={15} />
+                      </button>
+                    </div>
+                  )}
                 </section>
               )}
             </>
