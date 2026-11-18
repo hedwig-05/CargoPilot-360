@@ -185,6 +185,11 @@ def get_action_recovery_review(
                 (run.output_data or {}).get("recovery_analysis")
                 if run else None
             ),
+            "recovery_request_allowed": (
+                (run.output_data or {}).get("recovery_analysis", {}).get("recovery_decision")
+                == "RETRY_CANDIDATE"
+                if run else False
+            ),
             "plan_id": action.plan_id,
             "workflow_id": action.workflow_id
         }
