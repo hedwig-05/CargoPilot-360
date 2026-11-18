@@ -1,11 +1,15 @@
 
 import uuid
 import time
+import logging
 from datetime import datetime
 
 from sqlalchemy.orm import Session
 
 from app.engines.exception_lifecycle import transition_exception_status
+from app.engines.resolution_verification import verify_exception_resolution
+
+logger = logging.getLogger(__name__)
 
 from app.models import (
     Action,
@@ -713,6 +717,40 @@ def execute_action(
 
             db.commit()
 
+            # Verify the real shipment/exception evidence after the action
+            # has been durably recorded. A successful simulated operation
+            # is not, by itself, proof that the underlying issue is resolved.
+            verification_result = None
+            verification_exception_id = (
+                exception.exception_id if exception else None
+            )
+            approval_user_id = action.approved_by
+
+            if verification_exception_id is not None:
+                try:
+                    verification_result = verify_exception_resolution(
+                        db=db,
+                        exception_id=verification_exception_id,
+                        triggered_by=approval_user_id
+                    )
+                except Exception:
+                    # The action remains successful even if the separate
+                    # verification attempt is unavailable. Do not roll back
+                    # or relabel the already committed action execution.
+                    logger.exception(
+                        "Post-action verification failed for action %s",
+                        action_id
+                    )
+                    db.rollback()
+                    verification_result = {
+                        "success": False,
+                        "verification_status": "UNAVAILABLE",
+                        "message": (
+                            "The action succeeded, but automatic "
+                            "post-action verification was unavailable."
+                        )
+                    }
+
             return {
                 "success": True,
                 "message": "Action executed successfully.",
@@ -725,7 +763,8 @@ def execute_action(
                 "plan_status": plan.status,
                 "workflow_status": workflow.status,
                 "dependent_workflows_updated": dependent_count,
-                "result": result
+                "result": result,
+                "post_action_verification": verification_result
             }
 
         except Exception as error:
