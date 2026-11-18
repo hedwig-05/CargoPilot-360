@@ -9,7 +9,7 @@ from sqlalchemy.orm import Session
 from pydantic import BaseModel, Field
 
 from app.database.connection import get_db
-from app.models import Action, ActionExecution, ResolutionPlan
+from app.models import Action, ActionExecution, AgentRun, ResolutionPlan
 from app.models.user import User
 
 from app.api.helpers import (
@@ -114,6 +114,76 @@ def get_pending_approval_actions(
             "reasoning": plan.reasoning
         }
         for action, plan in records
+    ]
+
+
+# ==================================================
+# GET FAILED ACTIONS FOR MANAGER RECOVERY REVIEW
+# ==================================================
+
+@router.get("/actions/recovery-review")
+def get_action_recovery_review(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(
+        require_roles("ADMIN", "MANAGER")
+    )
+):
+    """
+    Show the latest failed attempt for each failed action.
+    This is a read-only manager queue; it never retries or replans.
+    """
+
+    latest_attempts = (
+        db.query(
+            ActionExecution.action_id.label("action_id"),
+            __import__("sqlalchemy").func.max(
+                ActionExecution.attempt_no
+            ).label("latest_attempt_no")
+        )
+        .filter(ActionExecution.status == "FAILED")
+        .group_by(ActionExecution.action_id)
+        .subquery()
+    )
+
+    records = (
+        db.query(Action, ActionExecution, AgentRun)
+        .join(
+            ActionExecution,
+            ActionExecution.action_id == Action.action_id
+        )
+        .join(
+            latest_attempts,
+            (latest_attempts.c.action_id == ActionExecution.action_id)
+            & (
+                latest_attempts.c.latest_attempt_no
+                == ActionExecution.attempt_no
+            )
+        )
+        .outerjoin(AgentRun, AgentRun.run_id == ActionExecution.run_id)
+        .filter(Action.execution_status == "FAILED")
+        .order_by(ActionExecution.completed_at.desc())
+        .all()
+    )
+
+    return [
+        {
+            "action_id": action.action_id,
+            "action_type": action.action_type,
+            "action_description": action.action_description,
+            "approval_status": action.approval_status,
+            "execution_status": action.execution_status,
+            "execution_id": execution.execution_id,
+            "attempt_no": execution.attempt_no,
+            "failed_at": execution.completed_at,
+            "error": execution.error_message,
+            "recovery_analysis": (
+                (run.output_data or {}).get("recovery_analysis")
+                if run else None
+            ),
+            "plan_id": action.plan_id,
+            "workflow_id": action.workflow_id
+        }
+        for action, execution, run in records
     ]
 
 
