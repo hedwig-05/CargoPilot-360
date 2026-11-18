@@ -196,13 +196,13 @@ def parse_recovery_alternative(response: str, allowed_action_types: list) -> dic
     fence = chr(96) * 3
     if cleaned.startswith(fence):
         cleaned = re.sub(
-            "^" + re.escape(fence) + r"(?:json)?\\s*",
+            "^" + re.escape(fence) + r"(?:json)?\s*",
             "",
             cleaned,
             count=1,
             flags=re.IGNORECASE,
         )
-        cleaned = re.sub(r"\\s*" + re.escape(fence) + "$", "", cleaned, count=1)
+        cleaned = re.sub(r"\s*" + re.escape(fence) + "$", "", cleaned, count=1)
 
     try:
         payload = json.loads(cleaned)
