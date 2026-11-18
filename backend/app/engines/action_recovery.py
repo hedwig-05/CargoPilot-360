@@ -106,8 +106,6 @@ def request_manager_authorized_retry(
         AgentRun,
         AuditLog,
         ResolutionPlan,
-        Investigation,
-        RiskAssessment,
         Exception as ShipmentException,
     )
     from app.engines.resolution_planner import create_resolution_plan
@@ -266,6 +264,8 @@ def request_manager_alternative_action(
         AgentRun,
         AuditLog,
         ResolutionPlan,
+        Investigation,
+        RiskAssessment,
         Exception as ShipmentException,
     )
     from app.engines.resolution_planner import (
