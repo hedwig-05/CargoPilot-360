@@ -32,7 +32,8 @@ from app.engines.action_executor import (
 )
 
 from app.engines.action_recovery import (
-    request_manager_authorized_retry
+    request_manager_authorized_retry,
+    request_manager_alternative_action
 )
 
 
@@ -324,6 +325,48 @@ def recover_failed_action_endpoint(
     """
     try:
         return request_manager_authorized_retry(
+            db=db,
+            action_id=action_id,
+            manager=current_user
+        )
+
+    except LookupError as error:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=str(error)
+        )
+
+    except ValueError as error:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(error)
+        )
+
+    except PermissionError as error:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=str(error)
+        )
+
+
+# ==================================================
+# REQUEST ADAPTIVE ALTERNATIVE ACTION
+# ==================================================
+
+@router.post("/actions/{action_id}/recover-alternative")
+def recover_alternative_action_endpoint(
+    action_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(
+        require_roles("ADMIN", "MANAGER")
+    )
+):
+    """
+    Ask the constrained recovery advisor to propose an alternative action.
+    Any replacement action is created as PENDING and requires fresh approval.
+    """
+    try:
+        return request_manager_alternative_action(
             db=db,
             action_id=action_id,
             manager=current_user
