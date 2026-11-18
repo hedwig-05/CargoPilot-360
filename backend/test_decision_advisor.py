@@ -1,6 +1,9 @@
 import pytest
 
-from app.engines.decision_advisor import parse_decision_advisory
+from app.engines.decision_advisor import (
+    parse_decision_advisory,
+    parse_recovery_alternative,
+)
 
 
 def valid_response():
@@ -78,3 +81,55 @@ def test_reject_empty_rationale():
 def test_reject_non_json_response():
     with pytest.raises(ValueError, match="valid JSON"):
         parse_decision_advisory("This plan looks fine.")
+
+
+def test_parse_allowlisted_recovery_alternative():
+    import json
+
+    payload = {
+        "decision": "SELECT_ALTERNATIVE",
+        "selected_action_type": "ESCALATE_TO_MANAGER",
+        "confidence": "HIGH",
+        "rationale": "The original correction request payload was invalid; escalation is safer.",
+        "missing_information": ["Manager should confirm the next operational owner."]
+    }
+    result = parse_recovery_alternative(
+        json.dumps(payload),
+        ["NOTIFY_OPERATIONS_OFFICER", "ESCALATE_TO_MANAGER"],
+    )
+    assert result["selected_action_type"] == "ESCALATE_TO_MANAGER"
+
+
+def test_reject_unallowlisted_recovery_action():
+    import json
+
+    payload = {
+        "decision": "SELECT_ALTERNATIVE",
+        "selected_action_type": "UPDATE_SHIPMENT_STATUS",
+        "confidence": "HIGH",
+        "rationale": "Change shipment status.",
+        "missing_information": [],
+    }
+    with pytest.raises(ValueError, match="not allowlisted"):
+        parse_recovery_alternative(
+            json.dumps(payload),
+            ["NOTIFY_OPERATIONS_OFFICER", "ESCALATE_TO_MANAGER"],
+        )
+
+
+def test_recovery_advisor_can_request_manual_review():
+    import json
+
+    payload = {
+        "decision": "REVIEW_REQUIRED",
+        "selected_action_type": None,
+        "confidence": "LOW",
+        "rationale": "The evidence does not support a safe alternative.",
+        "missing_information": ["Confirm whether the stakeholder was contacted."],
+    }
+    result = parse_recovery_alternative(
+        json.dumps(payload),
+        ["NOTIFY_OPERATIONS_OFFICER"],
+    )
+    assert result["decision"] == "REVIEW_REQUIRED"
+    assert result["selected_action_type"] is None
