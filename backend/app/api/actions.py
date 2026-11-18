@@ -186,7 +186,7 @@ def get_action_recovery_review(
                 if run else None
             ),
             "recovery_request_allowed": (
-                (run.output_data or {}).get("recovery_analysis", {}).get("recovery_decision")
+                ((run.output_data or {}).get("recovery_analysis") or {}).get("recovery_decision")
                 == "RETRY_CANDIDATE"
                 if run else False
             ),
