@@ -167,6 +167,11 @@ export default function AIOperationsPage() {
                 <div><span>Trigger</span><strong>{label(selected.trigger_type)}</strong></div>
                 <div><span>Current node</span><strong>{label(selected.current_node)}</strong></div>
                 <div><span>Started</span><strong>{date(selected.started_at)}</strong></div>
+                <div><span>Completed</span><strong>{date(selected.completed_at)}</strong></div>
+                <div><span>Graph</span><strong>{selected.graph_name || '—'} {selected.graph_version ? `· v${selected.graph_version}` : ''}</strong></div>
+                <div><span>Parent workflow</span><strong>{selected.parent_workflow_id ?? '—'}</strong></div>
+                <div><span>Exception</span><strong>{selected.exception_id ?? '—'}</strong></div>
+                <div><span>Thread</span><strong>{selected.thread_id || '—'}</strong></div>
               </div>
               {selected.error_message && <div className="op-error"><AlertTriangle size={15} />{selected.error_message}</div>}
               <div className="ai-ops-timeline-heading"><h3>Agent execution timeline</h3><span>{selectedRuns.length} runs</span></div>
