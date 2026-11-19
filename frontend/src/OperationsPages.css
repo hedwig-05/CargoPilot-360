@@ -1614,3 +1614,38 @@
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 }
+
+
+.ai-ops-workflow-filters {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 145px;
+  gap: 8px;
+  padding: 12px 12px 0;
+}
+.ai-ops-workflow-filters input,
+.ai-ops-workflow-filters select {
+  width: 100%;
+  min-width: 0;
+  min-height: 38px;
+  padding: 8px 10px;
+  color: var(--text-primary, #f4f6f8);
+  background: var(--bg-primary, #292936);
+  border: 1px solid var(--border-color, #46515e);
+  border-radius: 6px;
+  font: inherit;
+  font-size: 11px;
+}
+.ai-ops-workflow-filters input::placeholder {
+  color: var(--text-secondary, #91a5b5);
+}
+[data-theme="light"] .ai-ops-workflow-filters input,
+[data-theme="light"] .ai-ops-workflow-filters select,
+.light .ai-ops-workflow-filters input,
+.light .ai-ops-workflow-filters select {
+  color: #263746;
+  background: #f6f8fa;
+  border-color: #dce3e8;
+}
+@media (max-width: 520px) {
+  .ai-ops-workflow-filters { grid-template-columns: 1fr; }
+}
