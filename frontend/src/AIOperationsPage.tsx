@@ -172,7 +172,9 @@ export default function AIOperationsPage() {
               </select>
             </div>
             <div className="ai-ops-workflow-list">
-              {visibleWorkflows.map(workflow => (
+              {visibleWorkflows.length === 0 ? (
+                <p className="ai-ops-muted">No workflows match the current search or status filter.</p>
+              ) : visibleWorkflows.map(workflow => (
                 <button key={workflow.workflow_id} className={`ai-ops-workflow-card ${selectedId === workflow.workflow_id ? 'is-selected' : ''}`} onClick={() => setSelectedId(workflow.workflow_id)}>
                   <div className="ai-ops-card-top"><strong>Workflow #{workflow.workflow_id}</strong><Status value={workflow.status} /></div>
                   <span>Shipment #{workflow.shipment_id} · {label(workflow.trigger_type)}</span>
