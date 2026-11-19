@@ -182,7 +182,7 @@ function App() {
 
   const [currentUser, setCurrentUser] = useState<User | null>(null)
   const [isCheckingAuth, setIsCheckingAuth] = useState(true)
-  const [isLoggingIn, setIsLoggingIn] = useState(false)
+  const [, setIsLoggingIn] = useState(false)
 
   const [dashboardOverview, setDashboardOverview] =
     useState<DashboardOverview | null>(null)
