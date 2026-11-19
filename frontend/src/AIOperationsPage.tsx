@@ -6,6 +6,7 @@ const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://127.0.0.1:8000
 
 type WorkflowRow = Record<string, any>
 type RunRow = Record<string, any>
+type AuditRow = Record<string, any>
 
 function token() {
   return sessionStorage.getItem('cargopilot-token')
@@ -45,6 +46,8 @@ function JsonDetails({ value }: { value: any }) {
 export default function AIOperationsPage() {
   const [workflows, setWorkflows] = useState<WorkflowRow[]>([])
   const [runs, setRuns] = useState<RunRow[]>([])
+  const [auditLogs, setAuditLogs] = useState<AuditRow[]>([])
+  const [auditError, setAuditError] = useState('')
   const [selectedId, setSelectedId] = useState<number | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
@@ -53,9 +56,10 @@ export default function AIOperationsPage() {
     setLoading(true)
     setError('')
     try {
-      const [workflowResponse, runResponse] = await Promise.all([
+      const [workflowResponse, runResponse, auditResponse] = await Promise.all([
         fetch(`${API_BASE_URL}/api/agent-workflows`, { headers: headers() }),
-        fetch(`${API_BASE_URL}/api/agent-runs`, { headers: headers() })
+        fetch(`${API_BASE_URL}/api/agent-runs`, { headers: headers() }),
+        fetch(`${API_BASE_URL}/api/audit-logs`, { headers: headers() })
       ])
       if (!workflowResponse.ok) throw new Error(`Workflows: ${workflowResponse.status} ${workflowResponse.statusText}`)
       if (!runResponse.ok) throw new Error(`Agent runs: ${runResponse.status} ${runResponse.statusText}`)
@@ -65,6 +69,14 @@ export default function AIOperationsPage() {
       const nextRuns = Array.isArray(runData) ? runData : []
       setWorkflows(nextWorkflows)
       setRuns(nextRuns)
+      if (auditResponse.ok) {
+        const auditData = await auditResponse.json()
+        setAuditLogs(Array.isArray(auditData) ? auditData : [])
+        setAuditError('')
+      } else {
+        setAuditLogs([])
+        setAuditError(`Audit trail unavailable (${auditResponse.status}).`)
+      }
       setSelectedId(current => current && nextWorkflows.some((item: WorkflowRow) => item.workflow_id === current)
         ? current
         : nextWorkflows[0]?.workflow_id ?? null)
@@ -83,6 +95,12 @@ export default function AIOperationsPage() {
     .sort((a, b) => Number(a.step_no ?? 0) - Number(b.step_no ?? 0) ||
       new Date(a.started_at || 0).getTime() - new Date(b.started_at || 0).getTime()),
   [runs, selectedId])
+
+  const selectedAuditLogs = useMemo(() => auditLogs.filter(item =>
+    Number(item.workflow_id) === Number(selectedId) ||
+    selectedRuns.some(run => Number(run.run_id) === Number(item.run_id)) ||
+    (selected?.shipment_id != null && Number(item.shipment_id) === Number(selected.shipment_id))
+  ).sort((a, b) => new Date(b.created_at || 0).getTime() - new Date(a.created_at || 0).getTime()), [auditLogs, selectedId, selectedRuns, selected])
 
   const counts = useMemo(() => ({
     running: workflows.filter(item => item.status === 'RUNNING').length,
@@ -178,6 +196,35 @@ export default function AIOperationsPage() {
                   ))}
                 </div>
               )}
+              <div className="ai-ops-audit-section">
+                <div className="ai-ops-timeline-heading">
+                  <h3>Audit trail</h3>
+                  <span>{selectedAuditLogs.length} events</span>
+                </div>
+                {auditError && <p className="ai-ops-muted">{auditError}</p>}
+                {!auditError && selectedAuditLogs.length === 0 ? (
+                  <p className="ai-ops-muted">No audit events are linked to this workflow, its runs or shipment.</p>
+                ) : (
+                  <div className="ai-ops-audit-list">
+                    {selectedAuditLogs.map((event, index) => (
+                      <details className="ai-ops-audit-event" key={event.log_id ?? `${event.created_at}-${index}`}>
+                        <summary>
+                          <span className="ai-ops-audit-action">{label(event.action)}</span>
+                          <span className="ai-ops-audit-meta">{label(event.actor_type)} · {label(event.entity_type)} #{event.entity_id ?? '—'}</span>
+                          <small>{date(event.created_at)}</small>
+                        </summary>
+                        <div className="ai-ops-audit-meta-grid">
+                          <div><span>Actor</span><strong>{event.actor_name || (event.actor_user_id ? `User #${event.actor_user_id}` : label(event.actor_type))}</strong></div>
+                          <div><span>Run</span><strong>{event.run_id ?? '—'}</strong></div>
+                          <div><span>Workflow</span><strong>{event.workflow_id ?? '—'}</strong></div>
+                          <div><span>Shipment</span><strong>{event.shipment_id ?? '—'}</strong></div>
+                        </div>
+                        {event.details && <JsonDetails value={event.details} />}
+                      </details>
+                    ))}
+                  </div>
+                )}
+              </div>
             </>}
           </section>
         </div>
