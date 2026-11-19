@@ -48,6 +48,7 @@ function getStatusClass(status: string) {
   if (
     value === 'EXTRACTED' ||
     value === 'MATCH' ||
+    value === 'VALID' ||
     value === 'VALIDATED' ||
     value === 'COMPLETED'
   ) {
@@ -357,7 +358,7 @@ export default function DocumentsPage({
   const validatedCount = documents.filter((document) => {
     const status = document.validation_status.toUpperCase()
 
-    return status === 'VALIDATED' || status === 'COMPLETED'
+    return status === 'VALID' || status === 'VALIDATED' || status === 'COMPLETED'
   }).length
 
   const pendingCount = documents.filter((document) => {
@@ -702,6 +703,7 @@ export default function DocumentsPage({
               <tbody>
                 {validations.map((record, index) => {
                   const result = getValidationValue(record, [
+                    'validation_result',
                     'result',
                     'validation_status',
                     'status',
