@@ -49,6 +49,8 @@ export default function AIOperationsPage() {
   const [auditLogs, setAuditLogs] = useState<AuditRow[]>([])
   const [auditError, setAuditError] = useState('')
   const [selectedId, setSelectedId] = useState<number | null>(null)
+  const [workflowSearch, setWorkflowSearch] = useState('')
+  const [workflowStatus, setWorkflowStatus] = useState('ALL')
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
 
@@ -96,6 +98,13 @@ export default function AIOperationsPage() {
       new Date(a.started_at || 0).getTime() - new Date(b.started_at || 0).getTime()),
   [runs, selectedId])
 
+  const visibleWorkflows = useMemo(() => workflows.filter(item => {
+    const searchable = [item.workflow_id, item.shipment_id, item.exception_id, item.trigger_type, item.current_node, item.status, item.graph_name]
+      .map(value => String(value ?? '')).join(' ').toLowerCase()
+    return searchable.includes(workflowSearch.toLowerCase()) &&
+      (workflowStatus === 'ALL' || item.status === workflowStatus)
+  }).sort((a, b) => new Date(b.started_at || 0).getTime() - new Date(a.started_at || 0).getTime()), [workflows, workflowSearch, workflowStatus])
+
   const selectedAuditLogs = useMemo(() => auditLogs.filter(item =>
     Number(item.workflow_id) === Number(selectedId) ||
     selectedRuns.some(run => Number(run.run_id) === Number(item.run_id)) ||
@@ -142,10 +151,28 @@ export default function AIOperationsPage() {
           <section className="ai-ops-workflow-panel">
             <div className="ai-ops-panel-heading">
               <div><span className="op-eyebrow">EXECUTION REGISTER</span><h2>Workflows</h2></div>
-              <span>{workflows.length} records</span>
+              <span>{visibleWorkflows.length} of {workflows.length} records</span>
+            </div>
+            <div className="ai-ops-workflow-filters">
+              <input
+                value={workflowSearch}
+                onChange={event => setWorkflowSearch(event.target.value)}
+                placeholder="Search workflow, shipment or node..."
+                aria-label="Search workflows"
+              />
+              <select
+                value={workflowStatus}
+                onChange={event => setWorkflowStatus(event.target.value)}
+                aria-label="Filter workflows by status"
+              >
+                <option value="ALL">All statuses</option>
+                {Array.from(new Set(workflows.map(item => item.status).filter(Boolean))).sort().map(status => (
+                  <option key={status} value={status}>{label(status)}</option>
+                ))}
+              </select>
             </div>
             <div className="ai-ops-workflow-list">
-              {workflows.slice().sort((a, b) => new Date(b.started_at || 0).getTime() - new Date(a.started_at || 0).getTime()).map(workflow => (
+              {visibleWorkflows.map(workflow => (
                 <button key={workflow.workflow_id} className={`ai-ops-workflow-card ${selectedId === workflow.workflow_id ? 'is-selected' : ''}`} onClick={() => setSelectedId(workflow.workflow_id)}>
                   <div className="ai-ops-card-top"><strong>Workflow #{workflow.workflow_id}</strong><Status value={workflow.status} /></div>
                   <span>Shipment #{workflow.shipment_id} · {label(workflow.trigger_type)}</span>
