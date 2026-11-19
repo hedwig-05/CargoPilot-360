@@ -1599,3 +1599,18 @@
   .ai-ops-audit-meta-grid { grid-template-columns: 1fr; }
   .ai-ops-audit-event summary { grid-template-columns: 1fr; }
 }
+
+
+.ai-operations-page .op-metrics-grid {
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+}
+@media (max-width: 1100px) {
+  .ai-operations-page .op-metrics-grid {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+}
+@media (max-width: 620px) {
+  .ai-operations-page .op-metrics-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
