@@ -61,7 +61,7 @@ export default function AIOperationsPage() {
       const [workflowResponse, runResponse, auditResponse] = await Promise.all([
         fetch(`${API_BASE_URL}/api/agent-workflows`, { headers: headers() }),
         fetch(`${API_BASE_URL}/api/agent-runs`, { headers: headers() }),
-        fetch(`${API_BASE_URL}/api/audit-logs`, { headers: headers() })
+        fetch(`${API_BASE_URL}/api/audit-logs`, { headers: headers() }).catch(() => null)
       ])
       if (!workflowResponse.ok) throw new Error(`Workflows: ${workflowResponse.status} ${workflowResponse.statusText}`)
       if (!runResponse.ok) throw new Error(`Agent runs: ${runResponse.status} ${runResponse.statusText}`)
@@ -71,13 +71,13 @@ export default function AIOperationsPage() {
       const nextRuns = Array.isArray(runData) ? runData : []
       setWorkflows(nextWorkflows)
       setRuns(nextRuns)
-      if (auditResponse.ok) {
+      if (auditResponse?.ok) {
         const auditData = await auditResponse.json()
         setAuditLogs(Array.isArray(auditData) ? auditData : [])
         setAuditError('')
       } else {
         setAuditLogs([])
-        setAuditError(`Audit trail unavailable (${auditResponse.status}).`)
+        setAuditError(auditResponse ? `Audit trail unavailable (${auditResponse.status}).` : 'Audit trail could not be reached.')
       }
       setSelectedId(current => current && nextWorkflows.some((item: WorkflowRow) => item.workflow_id === current)
         ? current
