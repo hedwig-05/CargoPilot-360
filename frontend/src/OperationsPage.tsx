@@ -621,14 +621,20 @@ function OperationsPageContent({
     void loadData()
   }, [loadData])
 
-  const allRows = useMemo(() => {
-    return datasets.flatMap(dataset =>
-      dataset.rows.map((row, index) => ({
-        ...row,
-        __source: dataset.endpoint,
-        __rowKey: `${dataset.endpoint}-${findId(row)}-${index}`
-      }))
-    )
+  const allRows = useMemo<Row[]>(() => {
+    const rows: Row[] = []
+
+    datasets.forEach(dataset => {
+      dataset.rows.forEach((row, index) => {
+        rows.push({
+          ...row,
+          __source: dataset.endpoint,
+          __rowKey: `${dataset.endpoint}-${findId(row)}-${index}`
+        })
+      })
+    })
+
+    return rows
   }, [datasets])
 
   const exceptionStats = useMemo(() => {
