@@ -1,9 +1,8 @@
-
 from fastapi import APIRouter, Depends
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, aliased
 
 from app.database.connection import get_db
-from app.models import DocumentValidation
+from app.models import Document, DocumentValidation
 
 
 router = APIRouter(
@@ -22,7 +21,19 @@ def get_shipment_validations(
     db: Session = Depends(get_db)
 ):
 
-    validations = db.query(DocumentValidation).filter(
+    compared_document = aliased(Document)
+
+    validation_rows = db.query(
+        DocumentValidation,
+        Document,
+        compared_document
+    ).join(
+        Document,
+        Document.document_id == DocumentValidation.document_id
+    ).outerjoin(
+        compared_document,
+        compared_document.document_id == DocumentValidation.compared_document_id
+    ).filter(
         DocumentValidation.shipment_id == shipment_id
     ).order_by(
         DocumentValidation.validation_id.asc()
@@ -32,7 +43,15 @@ def get_shipment_validations(
         {
             "validation_id": validation.validation_id,
             "document_id": validation.document_id,
+            "document_type": document.document_type,
+            "file_name": document.file_name,
             "compared_document_id": validation.compared_document_id,
+            "compared_document_type": (
+                compared.document_type if compared else None
+            ),
+            "compared_file_name": (
+                compared.file_name if compared else None
+            ),
             "shipment_id": validation.shipment_id,
             "validation_run_id": validation.validation_run_id,
             "field_name": validation.field_name,
@@ -42,5 +61,5 @@ def get_shipment_validations(
             "explanation": validation.explanation,
             "validated_at": validation.validated_at
         }
-        for validation in validations
+        for validation, document, compared in validation_rows
     ]
