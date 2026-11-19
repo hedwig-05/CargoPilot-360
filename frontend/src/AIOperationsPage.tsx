@@ -129,6 +129,7 @@ export default function AIOperationsPage() {
         <div className="op-metric"><span className="op-metric-label">Workflows</span><strong>{workflows.length}</strong><small>Recorded workflow instances</small></div>
         <div className="op-metric"><span className="op-metric-label">Running</span><strong>{counts.running}</strong><small>Currently marked as running</small></div>
         <div className="op-metric"><span className="op-metric-label">Awaiting approval</span><strong>{counts.waiting}</strong><small>Human review required</small></div>
+        <div className="op-metric"><span className="op-metric-label">Failed workflows</span><strong>{counts.failed}</strong><small>Workflows requiring review</small></div>
         <div className="op-metric"><span className="op-metric-label">Agent runs</span><strong>{counts.runs}</strong><small>Recorded execution steps</small></div>
       </section>
 
@@ -186,6 +187,9 @@ export default function AIOperationsPage() {
                         <div><span>Model</span><strong>{run.model_name || 'Not recorded'}</strong></div>
                         <div><span>Latency</span><strong>{run.latency_ms == null ? '—' : `${run.latency_ms.toLocaleString()} ms`}</strong></div>
                         <div><span>Retries</span><strong>{run.retry_count ?? 0}</strong></div>
+                        <div><span>Prompt tokens</span><strong>{run.prompt_tokens == null ? '—' : run.prompt_tokens.toLocaleString()}</strong></div>
+                        <div><span>Completion tokens</span><strong>{run.completion_tokens == null ? '—' : run.completion_tokens.toLocaleString()}</strong></div>
+                        <div><span>Parent run</span><strong>{run.parent_run_id ?? '—'}</strong></div>
                         <div><span>Fallback used</span><strong>{run.output_data?.fallback_used === true || run.input_data?.fallback_used === true ? 'Yes' : 'Not indicated'}</strong></div>
                         <div><span>Completed</span><strong>{date(run.completed_at)}</strong></div>
                       </div>
